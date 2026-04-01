@@ -323,6 +323,30 @@ export interface SegmentedContacts {
   vc: EntitySummary[];
   prospects: EntitySummary[];
   otherOrgs: EntitySummary[];
+  /** Full entity details for prospects (includes meta fields like hq, revenue, employees). */
+  prospectDetails: Map<string, ContactDetail>;
+}
+
+/**
+ * Fetch full entity details for a set of entity IDs in parallel.
+ * Used to enrich the prospects tab with meta fields (hq, revenue, employees).
+ */
+async function fetchEntityDetails(ids: string[]): Promise<Map<string, ContactDetail>> {
+  const results = await Promise.allSettled(
+    ids.map((id) =>
+      gql<{ entity: ContactDetail }>(ENTITY_DETAIL_QUERY, { id }).then(
+        (d) => d.entity
+      )
+    )
+  );
+  const map = new Map<string, ContactDetail>();
+  for (let i = 0; i < ids.length; i++) {
+    const r = results[i];
+    if (r.status === "fulfilled") {
+      map.set(ids[i], r.value);
+    }
+  }
+  return map;
 }
 
 export async function fetchSegmentedContacts(): Promise<SegmentedContacts | null> {
@@ -343,7 +367,10 @@ export async function fetchSegmentedContacts(): Promise<SegmentedContacts | null
       else otherOrgs.push(org);
     }
 
-    return { people, vc, prospects, otherOrgs };
+    // Fetch full details for prospects to surface meta fields in the UI
+    const prospectDetails = await fetchEntityDetails(prospects.map((p) => p.id));
+
+    return { people, vc, prospects, otherOrgs, prospectDetails };
   } catch {
     return null;
   }

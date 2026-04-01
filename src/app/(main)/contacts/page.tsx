@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchSegmentedContacts, searchKissinger } from "@/lib/kissinger";
-import type { EntitySummary, SearchHit, ContactSegment } from "@/lib/kissinger";
+import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/lib/kissinger";
 
 interface ContactsPageProps {
   searchParams: Promise<{ segment?: string; q?: string }>;
@@ -33,6 +33,7 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
   let vc: EntitySummary[] = [];
   let prospects: EntitySummary[] = [];
   let otherOrgs: EntitySummary[] = [];
+  let prospectDetails: Map<string, ContactDetail> = new Map();
   let offline = false;
   let searchHits: SearchHit[] = [];
 
@@ -70,6 +71,7 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
       vc = result.vc;
       prospects = result.prospects;
       otherOrgs = result.otherOrgs;
+      prospectDetails = result.prospectDetails;
     }
   }
 
@@ -177,7 +179,7 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
       ) : segment === "vc" ? (
         <VCTable contacts={activeContacts} />
       ) : segment === "prospects" ? (
-        <ProspectsTable contacts={activeContacts} />
+        <ProspectsTable contacts={activeContacts} details={prospectDetails} />
       ) : (
         <ContactsTable contacts={activeContacts} showKind={segment === "all"} />
       )}
@@ -337,7 +339,13 @@ const FIT_COLORS: Record<string, string> = {
   "fit-low": "bg-bisque-100 text-bisque-600",
 };
 
-function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
+function ProspectsTable({
+  contacts,
+  details,
+}: {
+  contacts: EntitySummary[];
+  details?: Map<string, ContactDetail>;
+}) {
   // Sort: fit-high first
   const fitOrder = ["fit-high", "fit-medium", "fit-low"];
   const sorted = [...contacts].sort((a, b) => {
@@ -363,6 +371,12 @@ function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden md:table-cell">
               Sector
             </th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">
+              HQ
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">
+              Revenue
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -373,6 +387,10 @@ function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
                 !["prospect", "eloso"].includes(t) &&
                 !t.startsWith("fit-")
             );
+            const detail = details?.get(company.id);
+            const hq = detail?.meta.find((m) => m.key === "hq")?.value;
+            const revenue = detail?.meta.find((m) => m.key === "revenue")?.value;
+            const employees = detail?.meta.find((m) => m.key === "employees")?.value;
             return (
               <tr
                 key={company.id}
@@ -387,6 +405,9 @@ function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
                   >
                     {company.name}
                   </Link>
+                  {employees && (
+                    <div className="text-xs text-bisque-400 mt-0.5">{employees} employees</div>
+                  )}
                 </td>
                 <td className="px-4 py-3 hidden sm:table-cell">
                   {fitTag && (
@@ -401,6 +422,12 @@ function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
                 </td>
                 <td className="px-4 py-3 hidden md:table-cell">
                   <TagList tags={sectorTags} limit={3} />
+                </td>
+                <td className="px-4 py-3 hidden lg:table-cell text-bisque-600">
+                  {hq ?? "—"}
+                </td>
+                <td className="px-4 py-3 hidden xl:table-cell text-bisque-600">
+                  {revenue ?? "—"}
                 </td>
               </tr>
             );
