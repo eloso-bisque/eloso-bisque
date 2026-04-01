@@ -96,7 +96,7 @@ const GRAPH_STATS_QUERY = `
       totalEntities
       totalEdges
       entitiesByKind { kind count }
-      edgesByType { type count }
+      edgesByType { relationType count }
     }
   }
 `;
@@ -182,7 +182,7 @@ export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | 
           totalEntities: number;
           totalEdges: number;
           entitiesByKind: { kind: string; count: number }[];
-          edgesByType: { type: string; count: number }[];
+          edgesByType: { relationType: string; count: number }[];
         };
       }>(GRAPH_STATS_QUERY),
       gql<{
@@ -202,7 +202,7 @@ export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | 
         rawStats.entitiesByKind.map((e) => [e.kind, e.count])
       ),
       edgesByType: Object.fromEntries(
-        rawStats.edgesByType.map((e) => [e.type, e.count])
+        rawStats.edgesByType.map((e) => [e.relationType, e.count])
       ),
     };
 
