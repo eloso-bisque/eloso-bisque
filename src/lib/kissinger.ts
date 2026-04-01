@@ -429,7 +429,38 @@ export interface EntityEdge {
 export interface ResolvedEdge extends EntityEdge {
   /** Resolved name of the target entity (fetched separately). */
   targetName: string;
+  /** Kind of the target entity (person | org). */
+  targetKind: string;
 }
+
+/** A person connected to an org via works_at, with their role extracted. */
+export interface PersonAtOrg {
+  id: string;
+  name: string;
+  /** Role/title extracted from the edge notes or person meta. */
+  role: string;
+  strength: number;
+  edgeNotes: string;
+}
+
+const EDGES_TO_QUERY = `
+  query EdgesTo($entityId: String!, $first: Int) {
+    edgesTo(entityId: $entityId, first: $first) {
+      edges {
+        node {
+          source
+          target
+          relation
+          valueFrame
+          strength
+          notes
+          createdAt
+          updatedAt
+        }
+      }
+    }
+  }
+`;
 
 const ENTITY_NAME_QUERY = `
   query EntityName($id: String!) {
@@ -437,13 +468,34 @@ const ENTITY_NAME_QUERY = `
       id
       name
       kind
+      meta { key value }
     }
   }
 `;
 
+/**
+ * Extract a role/title string from an edge's notes or person meta.
+ * Edge notes typically look like "Co-Founder & COO at Anduril Industries".
+ * We strip the " at OrgName" suffix if present to get just the title.
+ */
+function extractRole(edgeNotes: string, personMeta: { key: string; value: string }[]): string {
+  // Try meta.title first (cleanest source)
+  const metaTitle = personMeta.find((m) => m.key === "title")?.value;
+  if (metaTitle) return metaTitle;
+
+  // Fall back to parsing edge notes: strip " at <OrgName>" suffix
+  if (edgeNotes) {
+    const atIdx = edgeNotes.lastIndexOf(" at ");
+    if (atIdx > 0) return edgeNotes.slice(0, atIdx);
+    return edgeNotes;
+  }
+
+  return "";
+}
+
 export async function fetchContactDetail(
   id: string
-): Promise<{ contact: ContactDetail; edges: ResolvedEdge[] } | null> {
+): Promise<{ contact: ContactDetail; edges: ResolvedEdge[]; peopleAtOrg: PersonAtOrg[] } | null> {
   try {
     const [entityData, edgesData] = await Promise.all([
       gql<{ entity: ContactDetail }>(ENTITY_DETAIL_QUERY, { id }),
@@ -454,25 +506,73 @@ export async function fetchContactDetail(
       })),
     ]);
 
+    const contact = entityData.entity;
     const rawEdges = edgesData.edgesFrom.edges.map((e) => e.node);
 
-    // Resolve target entity names in parallel (best-effort)
+    // Resolve target entity names and kinds in parallel (best-effort)
     const resolvedEdges: ResolvedEdge[] = await Promise.all(
       rawEdges.map(async (edge) => {
         try {
           const nameData = await gql<{
-            entity: { id: string; name: string; kind: string };
+            entity: { id: string; name: string; kind: string; meta: { key: string; value: string }[] };
           }>(ENTITY_NAME_QUERY, { id: edge.target });
-          return { ...edge, targetName: nameData.entity.name };
+          return { ...edge, targetName: nameData.entity.name, targetKind: nameData.entity.kind };
         } catch {
-          return { ...edge, targetName: edge.target };
+          return { ...edge, targetName: edge.target, targetKind: "unknown" };
         }
       })
     );
 
+    // For org entities, fetch reverse edges (people who work there)
+    let peopleAtOrg: PersonAtOrg[] = [];
+    if (contact.kind === "org") {
+      const reverseEdgesData = await gql<{
+        edgesTo: { edges: { node: EntityEdge }[] };
+      }>(EDGES_TO_QUERY, { entityId: id, first: 100 }).catch(() => ({
+        edgesTo: { edges: [] },
+      }));
+
+      const worksAtEdges = reverseEdgesData.edgesTo.edges
+        .map((e) => e.node)
+        .filter((e) => e.relation === "works_at");
+
+      // Resolve person details in parallel
+      peopleAtOrg = await Promise.allSettled(
+        worksAtEdges.map(async (edge) => {
+          try {
+            const personData = await gql<{
+              entity: { id: string; name: string; kind: string; meta: { key: string; value: string }[] };
+            }>(ENTITY_NAME_QUERY, { id: edge.source });
+            const role = extractRole(edge.notes, personData.entity.meta);
+            return {
+              id: edge.source,
+              name: personData.entity.name,
+              role,
+              strength: edge.strength,
+              edgeNotes: edge.notes,
+            } satisfies PersonAtOrg;
+          } catch {
+            return {
+              id: edge.source,
+              name: edge.source,
+              role: edge.notes || "",
+              strength: edge.strength,
+              edgeNotes: edge.notes,
+            } satisfies PersonAtOrg;
+          }
+        })
+      ).then((results) =>
+        results
+          .filter((r): r is PromiseFulfilledResult<PersonAtOrg> => r.status === "fulfilled")
+          .map((r) => r.value)
+          .sort((a, b) => b.strength - a.strength)
+      );
+    }
+
     return {
-      contact: entityData.entity,
+      contact,
       edges: resolvedEdges,
+      peopleAtOrg,
     };
   } catch {
     return null;

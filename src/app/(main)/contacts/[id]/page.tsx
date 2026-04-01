@@ -1,22 +1,24 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { fetchContactDetail, classifyOrg } from "@/lib/kissinger";
-import type { ResolvedEdge, ContactDetail } from "@/lib/kissinger";
+import type { ResolvedEdge, ContactDetail, PersonAtOrg } from "@/lib/kissinger";
 
 interface ContactDetailPageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export default async function ContactDetailPage({
   params,
 }: ContactDetailPageProps) {
-  const id = decodeURIComponent(params.id);
+  const { id: rawId } = await params;
+  const id = decodeURIComponent(rawId);
   const result = await fetchContactDetail(id);
 
   if (!result) notFound();
 
-  const { contact, edges } = result;
+  const { contact, edges, peopleAtOrg } = result;
 
+  // For person: outbound works_at edges point to orgs
   const worksAtEdges = edges.filter((e) => e.relation === "works_at");
   const otherEdges = edges.filter((e) => e.relation !== "works_at");
 
@@ -24,6 +26,12 @@ export default async function ContactDetailPage({
   const title = contact.meta.find((m) => m.key === "title")?.value;
   const email = contact.meta.find((m) => m.key === "email")?.value;
   const connectedOn = contact.meta.find((m) => m.key === "connected_on")?.value;
+  const company = contact.meta.find((m) => m.key === "company")?.value;
+
+  // Org-specific meta
+  const hq = contact.meta.find((m) => m.key === "hq")?.value;
+  const revenue = contact.meta.find((m) => m.key === "revenue")?.value;
+  const employees = contact.meta.find((m) => m.key === "employees")?.value;
 
   // Classify org entities for context badges
   const orgClass =
@@ -55,15 +63,26 @@ export default async function ContactDetailPage({
             <h1 className="text-2xl font-bold text-bisque-900 leading-tight">
               {contact.name}
             </h1>
-            {title && (
-              <p className="text-bisque-600 mt-1 text-sm">{title}</p>
+            {/* Person: show title and org */}
+            {contact.kind === "person" && title && (
+              <p className="text-bisque-600 mt-1 text-sm font-medium">{title}</p>
             )}
-            {worksAtEdges.length > 0 && (
+            {contact.kind === "person" && worksAtEdges.length > 0 && (
               <p className="text-bisque-500 text-sm mt-0.5">
-                {worksAtEdges
-                  .map((e) => e.targetName)
-                  .join(", ")}
+                {worksAtEdges.map((e) => (
+                  <Link
+                    key={e.target}
+                    href={`/contacts/${encodeURIComponent(e.target)}`}
+                    className="hover:text-bisque-700 hover:underline"
+                  >
+                    {e.targetName}
+                  </Link>
+                ))}
               </p>
+            )}
+            {/* Org: show employee count inline */}
+            {contact.kind === "org" && employees && (
+              <p className="text-bisque-500 text-sm mt-1">{employees} employees</p>
             )}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               {contact.kind === "person" ? (
@@ -97,7 +116,7 @@ export default async function ContactDetailPage({
         </div>
 
         {/* Contact details */}
-        {(email || connectedOn) && (
+        {(email || connectedOn || hq || revenue) && (
           <div className="mt-4 pt-4 border-t border-bisque-50 grid grid-cols-1 sm:grid-cols-2 gap-3">
             {email && (
               <div>
@@ -116,6 +135,18 @@ export default async function ContactDetailPage({
               <div>
                 <dt className="text-xs text-bisque-400">LinkedIn Connected</dt>
                 <dd className="text-sm text-bisque-800 mt-0.5">{connectedOn}</dd>
+              </div>
+            )}
+            {hq && (
+              <div>
+                <dt className="text-xs text-bisque-400">HQ</dt>
+                <dd className="text-sm text-bisque-800 mt-0.5">{hq}</dd>
+              </div>
+            )}
+            {revenue && (
+              <div>
+                <dt className="text-xs text-bisque-400">Revenue (est.)</dt>
+                <dd className="text-sm text-bisque-800 mt-0.5">{revenue}</dd>
               </div>
             )}
           </div>
@@ -148,21 +179,44 @@ export default async function ContactDetailPage({
         )}
       </div>
 
-      {/* Organisation connections */}
-      {worksAtEdges.length > 0 && (
+      {/* ------------------------------------------------------------------ */}
+      {/* PERSON VIEW: Organisation section (outbound works_at edges)          */}
+      {/* ------------------------------------------------------------------ */}
+      {contact.kind === "person" && worksAtEdges.length > 0 && (
         <section>
           <h2 className="text-lg font-semibold text-bisque-800 mb-3">
             Organisation
           </h2>
-          <div className="bg-white rounded-xl border border-bisque-100 shadow-sm divide-y divide-bisque-50">
-            {worksAtEdges.map((edge, i) => (
-              <EdgeRow key={i} edge={edge} />
+          <div className="space-y-2">
+            {worksAtEdges.map((edge) => (
+              <OrgCard key={edge.target} edge={edge} personTitle={title} personCompany={company} />
             ))}
           </div>
         </section>
       )}
 
-      {/* Other connections */}
+      {/* ------------------------------------------------------------------ */}
+      {/* ORG VIEW: People section (reverse works_at edges via edgesTo)        */}
+      {/* ------------------------------------------------------------------ */}
+      {contact.kind === "org" && peopleAtOrg.length > 0 && (
+        <section>
+          <h2 className="text-lg font-semibold text-bisque-800 mb-3">
+            People
+            <span className="ml-2 text-sm font-normal text-bisque-500">
+              ({peopleAtOrg.length})
+            </span>
+          </h2>
+          <div className="bg-white rounded-xl border border-bisque-100 shadow-sm divide-y divide-bisque-50">
+            {peopleAtOrg.map((person) => (
+              <PersonRow key={person.id} person={person} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Other connections (non works_at)                                    */}
+      {/* ------------------------------------------------------------------ */}
       {otherEdges.length > 0 && (
         <section>
           <h2 className="text-lg font-semibold text-bisque-800 mb-3">
@@ -176,7 +230,7 @@ export default async function ContactDetailPage({
         </section>
       )}
 
-      {edges.length === 0 && (
+      {edges.length === 0 && peopleAtOrg.length === 0 && (
         <div className="bg-white rounded-xl border border-bisque-100 p-6 text-center text-bisque-500 italic text-sm">
           No connections recorded.
         </div>
@@ -184,6 +238,84 @@ export default async function ContactDetailPage({
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// OrgCard — shown on a person's page under "Organisation"
+// ---------------------------------------------------------------------------
+
+function OrgCard({
+  edge,
+  personTitle,
+  personCompany,
+}: {
+  edge: ResolvedEdge;
+  personTitle?: string;
+  personCompany?: string;
+}) {
+  // Role: prefer meta title, else parse from edge notes
+  const roleFromNotes = (() => {
+    if (edge.notes) {
+      const atIdx = edge.notes.lastIndexOf(" at ");
+      if (atIdx > 0) return edge.notes.slice(0, atIdx);
+      return edge.notes;
+    }
+    return "";
+  })();
+  const role = personTitle || roleFromNotes;
+
+  return (
+    <Link
+      href={`/contacts/${encodeURIComponent(edge.target)}`}
+      className="block bg-white rounded-xl border border-bisque-100 shadow-sm p-4 hover:border-bisque-300 hover:shadow transition-all"
+    >
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="font-semibold text-bisque-800 text-base leading-tight">
+            {edge.targetName}
+          </p>
+          {role && (
+            <p className="text-bisque-500 text-sm mt-0.5">{role}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs text-bisque-400 capitalize">
+            {edge.relation.replace(/_/g, " ")}
+          </span>
+          {edge.strength > 0 && <StrengthPip strength={edge.strength} />}
+          <span className="text-bisque-300 text-sm">→</span>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PersonRow — shown on an org's page under "People"
+// ---------------------------------------------------------------------------
+
+function PersonRow({ person }: { person: PersonAtOrg }) {
+  return (
+    <Link
+      href={`/contacts/${encodeURIComponent(person.id)}`}
+      className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-bisque-50 transition-colors"
+    >
+      <div className="min-w-0">
+        <p className="font-medium text-bisque-800 text-sm">{person.name}</p>
+        {person.role && (
+          <p className="text-xs text-bisque-500 mt-0.5">{person.role}</p>
+        )}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {person.strength > 0 && <StrengthPip strength={person.strength} />}
+        <span className="text-bisque-300 text-sm">→</span>
+      </div>
+    </Link>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Generic edge row (for non-works_at connections)
+// ---------------------------------------------------------------------------
 
 function EdgeRow({ edge }: { edge: ResolvedEdge }) {
   return (
