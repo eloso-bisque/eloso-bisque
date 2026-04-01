@@ -153,6 +153,23 @@ export interface ContactsPage {
 }
 
 // ---------------------------------------------------------------------------
+// Segment types for the contacts CRM views
+// ---------------------------------------------------------------------------
+
+export type ContactSegment = "all" | "people" | "vc" | "prospects" | "other-orgs";
+
+// Tags that identify a VC firm
+const VC_TAGS = new Set(["vc", "investor"]);
+// Tags that identify a prospect enterprise
+const PROSPECT_TAGS = new Set(["prospect"]);
+
+export function classifyOrg(tags: string[]): "vc" | "prospects" | "other-orgs" {
+  if (tags.some((t) => VC_TAGS.has(t))) return "vc";
+  if (tags.some((t) => PROSPECT_TAGS.has(t))) return "prospects";
+  return "other-orgs";
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -266,6 +283,67 @@ export async function fetchContactsPage(
       endCursor: raw.pageInfo.endCursor,
       startCursor: raw.pageInfo.startCursor,
     };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fetch all entities of a kind (multi-page, for segmented views)
+// ---------------------------------------------------------------------------
+
+async function fetchAllEntities(kind: "person" | "org"): Promise<EntitySummary[]> {
+  const PAGE = 500;
+  const all: EntitySummary[] = [];
+  let cursor: string | undefined;
+  let safety = 0;
+
+  while (safety < 20) {
+    safety++;
+    const data = await gql<{
+      entities: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        edges: { node: EntitySummary }[];
+      };
+    }>(CONTACTS_PAGE_QUERY, { kind, first: PAGE, after: cursor });
+
+    const raw = data.entities;
+    const nodes = raw.edges.map((e) => e.node).filter((e) => !e.archived);
+    all.push(...nodes);
+
+    if (!raw.pageInfo.hasNextPage || !raw.pageInfo.endCursor) break;
+    cursor = raw.pageInfo.endCursor;
+  }
+
+  return all;
+}
+
+export interface SegmentedContacts {
+  people: EntitySummary[];
+  vc: EntitySummary[];
+  prospects: EntitySummary[];
+  otherOrgs: EntitySummary[];
+}
+
+export async function fetchSegmentedContacts(): Promise<SegmentedContacts | null> {
+  try {
+    const [people, allOrgs] = await Promise.all([
+      fetchAllEntities("person"),
+      fetchAllEntities("org"),
+    ]);
+
+    const vc: EntitySummary[] = [];
+    const prospects: EntitySummary[] = [];
+    const otherOrgs: EntitySummary[] = [];
+
+    for (const org of allOrgs) {
+      const seg = classifyOrg(org.tags);
+      if (seg === "vc") vc.push(org);
+      else if (seg === "prospects") prospects.push(org);
+      else otherOrgs.push(org);
+    }
+
+    return { people, vc, prospects, otherOrgs };
   } catch {
     return null;
   }

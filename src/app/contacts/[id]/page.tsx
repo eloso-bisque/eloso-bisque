@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { fetchContactDetail } from "@/lib/kissinger";
+import { fetchContactDetail, classifyOrg } from "@/lib/kissinger";
 import type { ResolvedEdge, ContactDetail } from "@/lib/kissinger";
 
 interface ContactDetailPageProps {
@@ -25,11 +25,23 @@ export default async function ContactDetailPage({
   const email = contact.meta.find((m) => m.key === "email")?.value;
   const connectedOn = contact.meta.find((m) => m.key === "connected_on")?.value;
 
+  // Classify org entities for context badges
+  const orgClass =
+    contact.kind === "org" ? classifyOrg(contact.tags) : null;
+  const backHref =
+    contact.kind === "person"
+      ? "/contacts?segment=people"
+      : orgClass === "vc"
+      ? "/contacts?segment=vc"
+      : orgClass === "prospects"
+      ? "/contacts?segment=prospects"
+      : "/contacts?segment=other-orgs";
+
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Breadcrumb */}
       <nav className="text-sm text-bisque-500">
-        <Link href="/contacts" className="hover:text-bisque-700 hover:underline">
+        <Link href={backHref} className="hover:text-bisque-700 hover:underline">
           Contacts
         </Link>
         <span className="mx-2">/</span>
@@ -53,10 +65,24 @@ export default async function ContactDetailPage({
                   .join(", ")}
               </p>
             )}
-            <div className="flex items-center gap-2 mt-2">
-              <span className="px-2 py-0.5 bg-bisque-100 text-bisque-700 rounded-full text-xs font-medium capitalize">
-                {contact.kind}
-              </span>
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              {contact.kind === "person" ? (
+                <span className="px-2 py-0.5 bg-sky-100 text-sky-700 rounded-full text-xs font-medium">
+                  Person
+                </span>
+              ) : orgClass === "vc" ? (
+                <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded-full text-xs font-medium">
+                  VC Firm
+                </span>
+              ) : orgClass === "prospects" ? (
+                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium">
+                  Prospect
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 bg-bisque-100 text-bisque-700 rounded-full text-xs font-medium capitalize">
+                  {contact.kind}
+                </span>
+              )}
               {contact.archived && (
                 <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-medium">
                   Archived
