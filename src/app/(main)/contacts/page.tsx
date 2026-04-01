@@ -39,7 +39,7 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
   if (isSearch) {
     const hits = await searchKissinger(q, 200);
     searchHits = hits;
-    const entityHits = hits.filter((h) => h.__typename === "EntitySearchHit");
+    const entityHits = hits.filter((h) => h.__typename === "EntitySearchHitGql");
     const mapped: EntitySummary[] = entityHits.map((h) => ({
       id: h.id,
       kind: h.kind ?? "unknown",

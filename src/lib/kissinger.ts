@@ -131,7 +131,7 @@ export interface ContactDetail {
 }
 
 export interface SearchHit {
-  __typename: "EntitySearchHit" | "InteractionSearchHit";
+  __typename: "EntitySearchHitGql" | "InteractionSearchHitGql";
   id: string;
   kind?: string;
   name?: string;
@@ -460,14 +460,14 @@ const SEARCH_QUERY = `
   query Search($query: String!, $limit: Int) {
     search(query: $query, limit: $limit) {
       __typename
-      ... on EntitySearchHit {
+      ... on EntitySearchHitGql {
         id
         kind
         name
         tags
         score
       }
-      ... on InteractionSearchHit {
+      ... on InteractionSearchHitGql {
         id
         subject
         interactionKind
