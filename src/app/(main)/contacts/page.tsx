@@ -2,6 +2,15 @@ import Link from "next/link";
 import { fetchSegmentedContacts, searchKissinger } from "@/lib/kissinger";
 import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/lib/kissinger";
 
+// Utility: extract a meta value by key from a ContactDetail map
+function getMeta(
+  details: Map<string, ContactDetail> | undefined,
+  id: string,
+  key: string
+): string | undefined {
+  return details?.get(id)?.meta.find((m) => m.key === key)?.value;
+}
+
 interface ContactsPageProps {
   searchParams: Promise<{ segment?: string; q?: string }>;
 }
@@ -34,6 +43,7 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
   let prospects: EntitySummary[] = [];
   let otherOrgs: EntitySummary[] = [];
   let prospectDetails: Map<string, ContactDetail> = new Map();
+  let peopleDetails: Map<string, ContactDetail> = new Map();
   let offline = false;
   let searchHits: SearchHit[] = [];
 
@@ -72,6 +82,7 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
       prospects = result.prospects;
       otherOrgs = result.otherOrgs;
       prospectDetails = result.prospectDetails;
+      peopleDetails = result.peopleDetails;
     }
   }
 
@@ -181,7 +192,11 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
       ) : segment === "prospects" ? (
         <ProspectsTable contacts={activeContacts} details={prospectDetails} />
       ) : (
-        <ContactsTable contacts={activeContacts} showKind={segment === "all"} />
+        <ContactsTable
+          contacts={activeContacts}
+          showKind={segment === "all"}
+          details={segment === "people" || segment === "all" ? peopleDetails : undefined}
+        />
       )}
     </div>
   );
@@ -194,9 +209,11 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
 function ContactsTable({
   contacts,
   showKind,
+  details,
 }: {
   contacts: EntitySummary[];
   showKind?: boolean;
+  details?: Map<string, ContactDetail>;
 }) {
   return (
     <div className="bg-white rounded-xl border border-bisque-100 overflow-hidden shadow-sm">
@@ -212,42 +229,68 @@ function ContactsTable({
               </th>
             )}
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden sm:table-cell">
-              Tags
+              Organization
             </th>
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden md:table-cell">
+              Title
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">
+              Tags
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">
               Updated
             </th>
           </tr>
         </thead>
         <tbody>
-          {contacts.map((contact, i) => (
-            <tr
-              key={contact.id}
-              className={`border-b border-bisque-50 hover:bg-bisque-50 transition-colors ${
-                i % 2 === 0 ? "" : "bg-bisque-50/30"
-              }`}
-            >
-              <td className="px-4 py-3">
-                <Link
-                  href={`/contacts/${encodeURIComponent(contact.id)}`}
-                  className="font-medium text-bisque-800 hover:text-bisque-600 hover:underline"
-                >
-                  {contact.name}
-                </Link>
-              </td>
-              {showKind && (
-                <td className="px-4 py-3 hidden sm:table-cell">
-                  <KindBadge kind={contact.kind} tags={contact.tags} />
+          {contacts.map((contact, i) => {
+            const company = getMeta(details, contact.id, "company");
+            const title = getMeta(details, contact.id, "title");
+            // Filter out internal/noisy tags from the tags column
+            const displayTags = contact.tags.filter(
+              (t) => !["eloso", "prospect-contact"].includes(t)
+            );
+            return (
+              <tr
+                key={contact.id}
+                className={`border-b border-bisque-50 hover:bg-bisque-50 transition-colors ${
+                  i % 2 === 0 ? "" : "bg-bisque-50/30"
+                }`}
+              >
+                <td className="px-4 py-3">
+                  <Link
+                    href={`/contacts/${encodeURIComponent(contact.id)}`}
+                    className="font-medium text-bisque-800 hover:text-bisque-600 hover:underline"
+                  >
+                    {contact.name}
+                  </Link>
+                  {/* Mobile: show org + title inline below name */}
+                  {(company || title) && (
+                    <div className="sm:hidden text-xs text-bisque-500 mt-0.5">
+                      {[title, company].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
                 </td>
-              )}
-              <td className="px-4 py-3 hidden sm:table-cell">
-                <TagList tags={contact.tags} limit={4} />
-              </td>
-              <td className="px-4 py-3 text-bisque-500 hidden md:table-cell">
-                {contact.updatedAt ? formatDate(contact.updatedAt) : "—"}
-              </td>
-            </tr>
-          ))}
+                {showKind && (
+                  <td className="px-4 py-3 hidden sm:table-cell">
+                    <KindBadge kind={contact.kind} tags={contact.tags} />
+                  </td>
+                )}
+                <td className="px-4 py-3 hidden sm:table-cell text-bisque-700">
+                  {company ?? "—"}
+                </td>
+                <td className="px-4 py-3 hidden md:table-cell text-bisque-500 text-xs">
+                  {title ?? "—"}
+                </td>
+                <td className="px-4 py-3 hidden lg:table-cell">
+                  <TagList tags={displayTags} limit={3} />
+                </td>
+                <td className="px-4 py-3 text-bisque-500 hidden xl:table-cell">
+                  {contact.updatedAt ? formatDate(contact.updatedAt) : "—"}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

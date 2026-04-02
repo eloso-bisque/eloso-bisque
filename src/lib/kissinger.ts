@@ -175,23 +175,16 @@ export function classifyOrg(tags: string[]): "vc" | "prospects" | "other-orgs" {
 
 export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | null> {
   try {
-    // Fetch stats and entity lists in parallel
-    const [statsData, personData, orgData] = await Promise.all([
-      gql<{
-        graphStats: {
-          totalEntities: number;
-          totalEdges: number;
-          entitiesByKind: { kind: string; count: number }[];
-          edgesByType: { relationType: string; count: number }[];
-        };
-      }>(GRAPH_STATS_QUERY),
-      gql<{
-        entities: { edges: { node: EntitySummary }[] };
-      }>(ENTITIES_QUERY, { kind: "person", first: 500 }),
-      gql<{
-        entities: { edges: { node: EntitySummary }[] };
-      }>(ENTITIES_QUERY, { kind: "org", first: 500 }),
-    ]);
+    // graphStats returns accurate total counts for all entities — no need to
+    // page through entity lists just to count them.
+    const statsData = await gql<{
+      graphStats: {
+        totalEntities: number;
+        totalEdges: number;
+        entitiesByKind: { kind: string; count: number }[];
+        edgesByType: { relationType: string; count: number }[];
+      };
+    }>(GRAPH_STATS_QUERY);
 
     const rawStats = statsData.graphStats;
 
@@ -206,21 +199,18 @@ export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | 
       ),
     };
 
-    const persons = personData.entities.edges
-      .map((e) => e.node)
-      .filter((e) => !e.archived);
-
-    const orgs = orgData.entities.edges
-      .map((e) => e.node)
-      .filter((e) => !e.archived);
+    // Read counts directly from the stats breakdown — these reflect all entities
+    // in the graph, not just the first page of a paginated query.
+    const totalContacts = stats.entitiesByKind["person"] ?? 0;
+    const totalOrgs = stats.entitiesByKind["org"] ?? 0;
 
     return {
       stats,
-      totalContacts: persons.length,
-      totalOrgs: orgs.length,
+      totalContacts,
+      totalOrgs,
       // interactions not readily countable without a dedicated query; leave 0
       recentInteractionCount: 0,
-      prospects: persons.slice(0, 20),
+      prospects: [],
     };
   } catch {
     // Kissinger may be unreachable in dev — return null gracefully
@@ -325,6 +315,8 @@ export interface SegmentedContacts {
   otherOrgs: EntitySummary[];
   /** Full entity details for prospects (includes meta fields like hq, revenue, employees). */
   prospectDetails: Map<string, ContactDetail>;
+  /** Full entity details for people (includes meta fields like company, title). */
+  peopleDetails: Map<string, ContactDetail>;
 }
 
 /**
@@ -367,10 +359,13 @@ export async function fetchSegmentedContacts(): Promise<SegmentedContacts | null
       else otherOrgs.push(org);
     }
 
-    // Fetch full details for prospects to surface meta fields in the UI
-    const prospectDetails = await fetchEntityDetails(prospects.map((p) => p.id));
+    // Fetch full details for prospects and people to surface meta fields in the UI
+    const [prospectDetails, peopleDetails] = await Promise.all([
+      fetchEntityDetails(prospects.map((p) => p.id)),
+      fetchEntityDetails(people.map((p) => p.id)),
+    ]);
 
-    return { people, vc, prospects, otherOrgs, prospectDetails };
+    return { people, vc, prospects, otherOrgs, prospectDetails, peopleDetails };
   } catch {
     return null;
   }
