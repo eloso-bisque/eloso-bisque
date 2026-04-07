@@ -206,75 +206,84 @@ function computeVelocity(current: number, before: number): VelocityMetric {
 }
 
 export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | null> {
+  // Cutoff: 14 days ago (UTC)
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+  // --- Main stats fetch (required) ---
+  let rawStats: {
+    totalEntities: number;
+    totalEdges: number;
+    entitiesByKind: { kind: string; count: number }[];
+    edgesByType: { relationType: string; count: number }[];
+  };
   try {
-    // Cutoff: 14 days ago (UTC)
-    const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-
-    // Fetch graph stats and velocity stats in parallel
-    const [statsData, velocityData] = await Promise.all([
-      gql<{
-        graphStats: {
-          totalEntities: number;
-          totalEdges: number;
-          entitiesByKind: { kind: string; count: number }[];
-          edgesByType: { relationType: string; count: number }[];
-        };
-      }>(GRAPH_STATS_QUERY),
-      gql<{
-        velocityStats: {
-          totalEntitiesBefore: number;
-          totalEdgesBefore: number;
-          entitiesByKindBefore: { kind: string; count: number }[];
-        };
-      }>(VELOCITY_STATS_QUERY, { beforeTs: twoWeeksAgo }),
-    ]);
-
-    const rawStats = statsData.graphStats;
-    const rawVelocity = velocityData.velocityStats;
-
-    const stats: GraphStats = {
-      totalEntities: rawStats.totalEntities,
-      totalEdges: rawStats.totalEdges,
-      entitiesByKind: Object.fromEntries(
-        rawStats.entitiesByKind.map((e) => [e.kind, e.count])
-      ),
-      edgesByType: Object.fromEntries(
-        rawStats.edgesByType.map((e) => [e.relationType, e.count])
-      ),
-    };
-
-    const velocityByKind = Object.fromEntries(
-      rawVelocity.entitiesByKindBefore.map((e) => [e.kind, e.count])
-    );
-
-    // Read counts directly from the stats breakdown — these reflect all entities
-    // in the graph, not just the first page of a paginated query.
-    const totalContacts = stats.entitiesByKind["person"] ?? 0;
-    const totalOrgs = stats.entitiesByKind["org"] ?? 0;
-    const contactsBefore = velocityByKind["person"] ?? 0;
-    const orgsBefore = velocityByKind["org"] ?? 0;
-
-    return {
-      stats,
-      totalContacts,
-      totalOrgs,
-      // interactions not readily countable without a dedicated query; leave 0
-      recentInteractionCount: 0,
-      prospects: [],
-      velocity: {
-        contacts: computeVelocity(totalContacts, contactsBefore),
-        orgs: computeVelocity(totalOrgs, orgsBefore),
-        totalEntities: computeVelocity(
-          stats.totalEntities,
-          rawVelocity.totalEntitiesBefore
-        ),
-        totalEdges: computeVelocity(stats.totalEdges, rawVelocity.totalEdgesBefore),
-      },
-    };
+    const statsData = await gql<{
+      graphStats: {
+        totalEntities: number;
+        totalEdges: number;
+        entitiesByKind: { kind: string; count: number }[];
+        edgesByType: { relationType: string; count: number }[];
+      };
+    }>(GRAPH_STATS_QUERY);
+    rawStats = statsData.graphStats;
   } catch {
     // Kissinger may be unreachable in dev — return null gracefully
     return null;
   }
+
+  const stats: GraphStats = {
+    totalEntities: rawStats.totalEntities,
+    totalEdges: rawStats.totalEdges,
+    entitiesByKind: Object.fromEntries(
+      rawStats.entitiesByKind.map((e) => [e.kind, e.count])
+    ),
+    edgesByType: Object.fromEntries(
+      rawStats.edgesByType.map((e) => [e.relationType, e.count])
+    ),
+  };
+
+  const totalContacts = stats.entitiesByKind["person"] ?? 0;
+  const totalOrgs = stats.entitiesByKind["org"] ?? 0;
+
+  // --- Velocity stats fetch (optional — fail gracefully with zero deltas) ---
+  let velocityByKind: Record<string, number> = {};
+  let totalEntitiesBefore = 0;
+  let totalEdgesBefore = 0;
+  try {
+    const velocityData = await gql<{
+      velocityStats: {
+        totalEntitiesBefore: number;
+        totalEdgesBefore: number;
+        entitiesByKindBefore: { kind: string; count: number }[];
+      };
+    }>(VELOCITY_STATS_QUERY, { beforeTs: twoWeeksAgo });
+    const rawVelocity = velocityData.velocityStats;
+    velocityByKind = Object.fromEntries(
+      rawVelocity.entitiesByKindBefore.map((e) => [e.kind, e.count])
+    );
+    totalEntitiesBefore = rawVelocity.totalEntitiesBefore;
+    totalEdgesBefore = rawVelocity.totalEdgesBefore;
+  } catch {
+    // velocityStats not implemented on this backend — show zero deltas
+  }
+
+  const contactsBefore = velocityByKind["person"] ?? 0;
+  const orgsBefore = velocityByKind["org"] ?? 0;
+
+  return {
+    stats,
+    totalContacts,
+    totalOrgs,
+    // interactions not readily countable without a dedicated query; leave 0
+    recentInteractionCount: 0,
+    prospects: [],
+    velocity: {
+      contacts: computeVelocity(totalContacts, contactsBefore),
+      orgs: computeVelocity(totalOrgs, orgsBefore),
+      totalEntities: computeVelocity(stats.totalEntities, totalEntitiesBefore),
+      totalEdges: computeVelocity(stats.totalEdges, totalEdgesBefore),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
