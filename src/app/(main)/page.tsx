@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { fetchKissingerFunnelData } from "@/lib/kissinger";
+import { fetchKissingerFunnelData, VelocityMetric } from "@/lib/kissinger";
 
 export default async function HomePage() {
   const kissinger = await fetchKissingerFunnelData();
@@ -18,18 +18,22 @@ export default async function HomePage() {
             <StatCard
               label="Total Contacts"
               value={kissinger.totalContacts}
+              velocity={kissinger.velocity.contacts}
             />
             <StatCard
               label="Organisations"
               value={kissinger.totalOrgs}
+              velocity={kissinger.velocity.orgs}
             />
             <StatCard
               label="Total Entities"
               value={kissinger.stats.totalEntities}
+              velocity={kissinger.velocity.totalEntities}
             />
             <StatCard
               label="Connections"
               value={kissinger.stats.totalEdges}
+              velocity={kissinger.velocity.totalEdges}
             />
           </div>
         ) : (
@@ -64,17 +68,45 @@ export default async function HomePage() {
   );
 }
 
+function formatVelocity(v: VelocityMetric): string | null {
+  if (v.delta === 0) return null;
+  const sign = v.delta > 0 ? "+" : "";
+  const gross = `${sign}${v.delta.toLocaleString()}`;
+  if (v.pct === null) return gross;
+  const pctStr = `${sign}${v.pct.toFixed(1)}%`;
+  return `${gross} (${pctStr})`;
+}
+
 function StatCard({
   label,
   value,
+  velocity,
 }: {
   label: string;
   value: number;
+  velocity?: VelocityMetric;
 }) {
+  const velocityText = velocity ? formatVelocity(velocity) : null;
+  const isPositive = velocity && velocity.delta > 0;
+  const isNegative = velocity && velocity.delta < 0;
+
   return (
     <div className="bg-white rounded-xl shadow p-4 border border-bisque-100">
       <p className="text-2xl font-bold text-bisque-800">{value.toLocaleString()}</p>
       <p className="text-sm text-bisque-600 mt-1">{label}</p>
+      {velocityText && (
+        <p
+          className={`text-xs mt-1 font-medium ${
+            isPositive
+              ? "text-green-600"
+              : isNegative
+              ? "text-red-500"
+              : "text-bisque-400"
+          }`}
+        >
+          {velocityText} <span className="font-normal text-bisque-400">2w</span>
+        </p>
+      )}
     </div>
   );
 }

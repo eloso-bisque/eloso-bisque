@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { fetchSegmentedContacts, searchKissinger } from "@/lib/kissinger";
 import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/lib/kissinger";
+import AddNewButton from "@/components/AddNewButton";
 
 // Utility: extract a meta value by key from a ContactDetail map
 function getMeta(
@@ -115,13 +116,16 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-bisque-900">Contacts</h1>
-        <span className="text-sm text-bisque-600">
-          {offline
-            ? "Offline"
-            : isSearch
-            ? `${activeContacts.length} result${activeContacts.length !== 1 ? "s" : ""}`
-            : `${activeContacts.length} shown`}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-bisque-600">
+            {offline
+              ? "Offline"
+              : isSearch
+              ? `${activeContacts.length} result${activeContacts.length !== 1 ? "s" : ""}`
+              : `${activeContacts.length} shown`}
+          </span>
+          <AddNewButton defaultKind={segment === "vc" || segment === "prospects" || segment === "other-orgs" ? "org" : "person"} />
+        </div>
       </div>
 
       {/* Search bar */}

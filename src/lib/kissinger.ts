@@ -74,6 +74,14 @@ export interface Interaction {
   participants: string[];
 }
 
+/** Velocity metric for a single stat box. */
+export interface VelocityMetric {
+  /** Absolute change (current - twoWeeksAgo). Positive = growth. */
+  delta: number;
+  /** Percentage change, or null if previous count was 0. */
+  pct: number | null;
+}
+
 export interface KissingerFunnelData {
   stats: GraphStats;
   /** Total person entities */
@@ -84,6 +92,13 @@ export interface KissingerFunnelData {
   recentInteractionCount: number;
   /** People entities as potential prospects */
   prospects: EntitySummary[];
+  /** Velocity metrics for the past 2 weeks */
+  velocity: {
+    contacts: VelocityMetric;
+    orgs: VelocityMetric;
+    totalEntities: VelocityMetric;
+    totalEdges: VelocityMetric;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +112,16 @@ const GRAPH_STATS_QUERY = `
       totalEdges
       entitiesByKind { kind count }
       edgesByType { relationType count }
+    }
+  }
+`;
+
+const VELOCITY_STATS_QUERY = `
+  query VelocityStats($beforeTs: String!) {
+    velocityStats(beforeTs: $beforeTs) {
+      totalEntitiesBefore
+      totalEdgesBefore
+      entitiesByKindBefore { kind count }
     }
   }
 `;
@@ -173,20 +198,39 @@ export function classifyOrg(tags: string[]): "vc" | "prospects" | "other-orgs" {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Compute a velocity metric from current and two-weeks-ago counts. */
+function computeVelocity(current: number, before: number): VelocityMetric {
+  const delta = current - before;
+  const pct = before > 0 ? (delta / before) * 100 : null;
+  return { delta, pct };
+}
+
 export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | null> {
   try {
-    // graphStats returns accurate total counts for all entities — no need to
-    // page through entity lists just to count them.
-    const statsData = await gql<{
-      graphStats: {
-        totalEntities: number;
-        totalEdges: number;
-        entitiesByKind: { kind: string; count: number }[];
-        edgesByType: { relationType: string; count: number }[];
-      };
-    }>(GRAPH_STATS_QUERY);
+    // Cutoff: 14 days ago (UTC)
+    const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Fetch graph stats and velocity stats in parallel
+    const [statsData, velocityData] = await Promise.all([
+      gql<{
+        graphStats: {
+          totalEntities: number;
+          totalEdges: number;
+          entitiesByKind: { kind: string; count: number }[];
+          edgesByType: { relationType: string; count: number }[];
+        };
+      }>(GRAPH_STATS_QUERY),
+      gql<{
+        velocityStats: {
+          totalEntitiesBefore: number;
+          totalEdgesBefore: number;
+          entitiesByKindBefore: { kind: string; count: number }[];
+        };
+      }>(VELOCITY_STATS_QUERY, { beforeTs: twoWeeksAgo }),
+    ]);
 
     const rawStats = statsData.graphStats;
+    const rawVelocity = velocityData.velocityStats;
 
     const stats: GraphStats = {
       totalEntities: rawStats.totalEntities,
@@ -199,10 +243,16 @@ export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | 
       ),
     };
 
+    const velocityByKind = Object.fromEntries(
+      rawVelocity.entitiesByKindBefore.map((e) => [e.kind, e.count])
+    );
+
     // Read counts directly from the stats breakdown — these reflect all entities
     // in the graph, not just the first page of a paginated query.
     const totalContacts = stats.entitiesByKind["person"] ?? 0;
     const totalOrgs = stats.entitiesByKind["org"] ?? 0;
+    const contactsBefore = velocityByKind["person"] ?? 0;
+    const orgsBefore = velocityByKind["org"] ?? 0;
 
     return {
       stats,
@@ -211,6 +261,15 @@ export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | 
       // interactions not readily countable without a dedicated query; leave 0
       recentInteractionCount: 0,
       prospects: [],
+      velocity: {
+        contacts: computeVelocity(totalContacts, contactsBefore),
+        orgs: computeVelocity(totalOrgs, orgsBefore),
+        totalEntities: computeVelocity(
+          stats.totalEntities,
+          rawVelocity.totalEntitiesBefore
+        ),
+        totalEdges: computeVelocity(stats.totalEdges, rawVelocity.totalEdgesBefore),
+      },
     };
   } catch {
     // Kissinger may be unreachable in dev — return null gracefully
