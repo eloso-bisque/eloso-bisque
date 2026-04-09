@@ -6,21 +6,38 @@ import type { OutreachTask, GeneratedMessage } from "@/lib/outreach";
 interface OutreachTaskCardProps {
   task: OutreachTask;
   message: GeneratedMessage;
+  /** If true, show "Personalize with AI" button (API key available) */
+  claudeEnabled?: boolean;
 }
 
-export default function OutreachTaskCard({ task, message }: OutreachTaskCardProps) {
+type MessageSource = "template" | "claude";
+
+interface DisplayMessage {
+  text: string;
+  source: MessageSource;
+  angle: "vision" | "technical" | "strategic";
+}
+
+export default function OutreachTaskCard({ task, message, claudeEnabled = false }: OutreachTaskCardProps) {
   const { contact } = task;
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [personalizing, setPersonalizing] = useState(false);
+  const [displayMessage, setDisplayMessage] = useState<DisplayMessage>({
+    text: message.message,
+    source: "template",
+    angle: message.angle,
+  });
+  const [personalizeError, setPersonalizeError] = useState<string | null>(null);
 
   const handleCopy = useCallback(async () => {
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
-        await navigator.clipboard.writeText(message.message);
+        await navigator.clipboard.writeText(displayMessage.text);
       } else {
         // Fallback for environments without clipboard API
         const ta = document.createElement("textarea");
-        ta.value = message.message;
+        ta.value = displayMessage.text;
         ta.style.position = "fixed";
         ta.style.opacity = "0";
         document.body.appendChild(ta);
@@ -33,7 +50,26 @@ export default function OutreachTaskCard({ task, message }: OutreachTaskCardProp
     } catch {
       // Silent fail — user can still select and copy manually
     }
-  }, [message.message]);
+  }, [displayMessage.text]);
+
+  const handlePersonalize = useCallback(async () => {
+    setPersonalizing(true);
+    setPersonalizeError(null);
+    try {
+      const res = await fetch("/api/outreach/generate-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contact: task.contact, assignee: task.assignee }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { message: string; source: MessageSource; angle: "vision" | "technical" | "strategic" };
+      setDisplayMessage({ text: data.message, source: data.source, angle: data.angle });
+    } catch {
+      setPersonalizeError("Personalization failed — using template.");
+    } finally {
+      setPersonalizing(false);
+    }
+  }, [task.contact, task.assignee]);
 
   const fitColors: Record<string, string> = {
     high: "bg-green-100 text-green-700",
@@ -84,7 +120,31 @@ export default function OutreachTaskCard({ task, message }: OutreachTaskCardProp
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+            {claudeEnabled && displayMessage.source === "template" && (
+              <button
+                onClick={handlePersonalize}
+                disabled={personalizing}
+                className="px-3 py-1.5 text-sm font-medium rounded-lg bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                {personalizing ? (
+                  <>
+                    <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Personalizing…
+                  </>
+                ) : (
+                  <>✦ Personalize with AI</>
+                )}
+              </button>
+            )}
+            {displayMessage.source === "claude" && (
+              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-violet-50 border border-violet-200 text-violet-600">
+                ✦ AI-personalized
+              </span>
+            )}
             <button
               onClick={() => setExpanded((v) => !v)}
               className="px-3 py-1.5 text-sm font-medium rounded-lg border border-bisque-200 text-bisque-700 hover:bg-bisque-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-bisque-400"
@@ -93,15 +153,21 @@ export default function OutreachTaskCard({ task, message }: OutreachTaskCardProp
             </button>
           </div>
         </div>
+        {personalizeError && (
+          <p className="text-xs text-amber-600 mt-2">{personalizeError}</p>
+        )}
       </div>
 
       {/* Expandable message panel */}
       {expanded && (
         <div className="border-t border-bisque-100 bg-bisque-50/50 px-5 py-4 space-y-3">
-          {/* Angle badge */}
-          <div className="flex items-center justify-between">
+          {/* Angle badge + copy button */}
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <span className="text-xs font-medium text-bisque-500 uppercase tracking-wide">
-              LinkedIn outreach — {angleLabels[message.angle] ?? message.angle}
+              LinkedIn outreach — {angleLabels[displayMessage.angle] ?? displayMessage.angle}
+              {displayMessage.source === "claude" && (
+                <span className="ml-2 text-violet-500">· AI-personalized</span>
+              )}
             </span>
             <button
               onClick={handleCopy}
@@ -138,7 +204,7 @@ export default function OutreachTaskCard({ task, message }: OutreachTaskCardProp
           {/* Message text */}
           <div className="bg-white rounded-lg border border-bisque-100 p-4">
             <p className="text-sm text-bisque-800 leading-relaxed whitespace-pre-wrap">
-              {message.message}
+              {displayMessage.text}
             </p>
           </div>
 
@@ -148,7 +214,7 @@ export default function OutreachTaskCard({ task, message }: OutreachTaskCardProp
               month: "short",
               day: "numeric",
               year: "numeric",
-            })} · Contact ID: {contact.id.slice(0, 8)}…
+            })} · Contact ID: {contact.id.slice(0, 8)}… · Source: {displayMessage.source}
           </p>
         </div>
       )}

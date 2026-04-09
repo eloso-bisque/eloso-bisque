@@ -30,6 +30,9 @@ export default async function OutreachPage() {
   const rawContacts = await fetchProspectContacts();
   const offline = rawContacts === null;
 
+  // Check if Claude API is available for personalization
+  const claudeEnabled = Boolean(process.env.ANTHROPIC_API_KEY);
+
   // Map and sort: fit-high first, then alphabetically by company
   const fitOrder = { high: 0, medium: 1, low: 2 };
   const contacts: ProspectContact[] = (rawContacts ?? [])
@@ -80,6 +83,7 @@ export default async function OutreachPage() {
         messagesPerMember={messagesPerMember}
         taskCounts={taskCounts}
         teamMembers={TEAM_MEMBERS}
+        claudeEnabled={claudeEnabled}
       />
     </div>
   );

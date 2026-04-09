@@ -9,6 +9,7 @@ interface OutreachPageClientProps {
   messagesPerMember: Record<TeamMember, GeneratedMessage[]>;
   taskCounts: Record<TeamMember, number>;
   teamMembers: TeamMember[];
+  claudeEnabled?: boolean;
 }
 
 export default function OutreachPageClient({
@@ -16,6 +17,7 @@ export default function OutreachPageClient({
   messagesPerMember,
   taskCounts,
   teamMembers,
+  claudeEnabled = false,
 }: OutreachPageClientProps) {
   const [active, setActive] = useState<TeamMember>(teamMembers[0]);
 
@@ -54,6 +56,7 @@ export default function OutreachPageClient({
         <OutreachTaskList
           tasks={distributed[active]}
           messages={messagesPerMember[active]}
+          claudeEnabled={claudeEnabled}
         />
       </div>
     </div>

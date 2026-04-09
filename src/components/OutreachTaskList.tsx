@@ -6,9 +6,10 @@ import type { OutreachTask, GeneratedMessage } from "@/lib/outreach";
 interface OutreachTaskListProps {
   tasks: OutreachTask[];
   messages: GeneratedMessage[];
+  claudeEnabled?: boolean;
 }
 
-export default function OutreachTaskList({ tasks, messages }: OutreachTaskListProps) {
+export default function OutreachTaskList({ tasks, messages, claudeEnabled = false }: OutreachTaskListProps) {
   const messageMap = new Map(messages.map((m) => [m.task.id, m]));
 
   if (tasks.length === 0) {
@@ -32,7 +33,7 @@ export default function OutreachTaskList({ tasks, messages }: OutreachTaskListPr
       {tasks.map((task) => {
         const msg = messageMap.get(task.id);
         if (!msg) return null;
-        return <OutreachTaskCard key={task.id} task={task} message={msg} />;
+        return <OutreachTaskCard key={task.id} task={task} message={msg} claudeEnabled={claudeEnabled} />;
       })}
     </div>
   );
