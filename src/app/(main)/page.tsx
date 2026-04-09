@@ -15,26 +15,34 @@ export default async function HomePage() {
         </h2>
         {kissinger ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4">
-            <StatCard
-              label="Contacts"
-              value={kissinger.totalContacts}
-              velocity={kissinger.velocity.contacts}
-            />
-            <StatCard
-              label="Orgs"
-              value={kissinger.totalOrgs}
-              velocity={kissinger.velocity.orgs}
-            />
-            <StatCard
-              label="Entities"
-              value={kissinger.stats.totalEntities}
-              velocity={kissinger.velocity.totalEntities}
-            />
-            <StatCard
-              label="Connections"
-              value={kissinger.stats.totalEdges}
-              velocity={kissinger.velocity.totalEdges}
-            />
+            <Link href="/contacts?segment=people">
+              <StatCard
+                label="Contacts"
+                value={kissinger.totalContacts}
+                velocity={kissinger.velocity.contacts}
+              />
+            </Link>
+            <Link href="/contacts?segment=other-orgs">
+              <StatCard
+                label="Orgs"
+                value={kissinger.totalOrgs}
+                velocity={kissinger.velocity.orgs}
+              />
+            </Link>
+            <Link href="/contacts?segment=all">
+              <StatCard
+                label="Entities"
+                value={kissinger.stats.totalEntities}
+                velocity={kissinger.velocity.totalEntities}
+              />
+            </Link>
+            <Link href="/contacts">
+              <StatCard
+                label="Connections"
+                value={kissinger.stats.totalEdges}
+                velocity={kissinger.velocity.totalEdges}
+              />
+            </Link>
           </div>
         ) : (
           <p className="text-bisque-600 italic text-sm">
@@ -59,13 +67,25 @@ export default async function HomePage() {
         </Link>
         <Link
           href="/outreach"
-          className="flex items-center gap-4 md:hidden p-4 bg-bisque-800 text-bisque-50 rounded-2xl shadow active:bg-bisque-700 transition-colors min-h-[64px]"
+          className="flex items-center gap-4 md:block p-4 md:p-6 bg-bisque-800 text-bisque-50 rounded-2xl shadow active:bg-bisque-700 hover:bg-bisque-700 transition-colors min-h-[64px] md:min-h-0"
         >
-          <span className="text-2xl" aria-hidden="true">✉️</span>
+          <span className="text-2xl md:hidden" aria-hidden="true">✉️</span>
           <div>
-            <p className="text-base font-semibold">Outreach</p>
-            <p className="text-sm text-bisque-200 mt-0.5">
+            <p className="text-base md:text-lg font-semibold">Outreach</p>
+            <p className="text-sm text-bisque-200 mt-0.5 md:mt-1">
               LinkedIn outreach tasks for Ben, Jake, and Drew.
+            </p>
+          </div>
+        </Link>
+        <Link
+          href="/investors"
+          className="flex items-center gap-4 md:block p-4 md:p-6 bg-bisque-500 text-bisque-50 rounded-2xl shadow active:bg-bisque-400 hover:bg-bisque-400 transition-colors min-h-[64px] md:min-h-0"
+        >
+          <span className="text-2xl md:hidden" aria-hidden="true">💼</span>
+          <div>
+            <p className="text-base md:text-lg font-semibold">Investors</p>
+            <p className="text-sm text-bisque-200 mt-0.5 md:mt-1">
+              VC firms and investor pipeline.
             </p>
           </div>
         </Link>
@@ -109,7 +129,7 @@ function StatCard({
   const isNegative = velocity && velocity.delta < 0;
 
   return (
-    <div className="bg-white rounded-xl shadow p-3 md:p-4 border border-bisque-100">
+    <div className="bg-white rounded-xl shadow p-3 md:p-4 border border-bisque-100 hover:shadow-md hover:border-bisque-200 transition-all cursor-pointer">
       <p className="text-xl md:text-2xl font-bold text-bisque-800">{value.toLocaleString()}</p>
       <p className="text-xs md:text-sm text-bisque-600 mt-0.5 md:mt-1">{label}</p>
       {velocityText && (

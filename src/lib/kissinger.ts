@@ -64,6 +64,10 @@ export interface EntitySummary {
   tags: string[];
   updatedAt: string;
   archived: boolean;
+  /** Inline meta fields — available when fetched via CONTACTS_PAGE_QUERY */
+  meta?: { key: string; value: string }[];
+  /** Inline notes — available when fetched via CONTACTS_PAGE_QUERY */
+  notes?: string;
 }
 
 export interface Interaction {
@@ -171,6 +175,7 @@ export interface SearchHit {
 
 export interface ContactsPage {
   contacts: EntitySummary[];
+  /** Count of non-archived contacts in this page (not total across all pages) */
   total: number;
   hasNextPage: boolean;
   hasPreviousPage: boolean;
@@ -308,6 +313,8 @@ const CONTACTS_PAGE_QUERY = `
           tags
           updatedAt
           archived
+          meta { key value }
+          notes
         }
       }
     }

@@ -336,16 +336,22 @@ function MobileContactList({
   return (
     <>
       {contacts.map((contact) => {
+        // For people: use title + company. For prospect orgs: use industry + location.
         const company = getMeta(details, contact.id, "company");
         const title = getMeta(details, contact.id, "title");
+        const industry = getMeta(details, contact.id, "industry");
+        const location = getMeta(details, contact.id, "location");
         const scoreResult = scores?.get(contact.id);
+        // Prospect orgs don't have title/company; show industry + location instead
+        const displayTitle = title ?? (contact.kind === "org" ? industry : undefined);
+        const displayOrg = company ?? (contact.kind === "org" ? location : undefined);
         return (
           <ContactCard
             key={contact.id}
             id={contact.id}
             name={contact.name}
-            title={title}
-            org={company}
+            title={displayTitle}
+            org={displayOrg}
             kind={contact.kind}
             tags={contact.tags}
             score={scoreResult?.score}
@@ -683,13 +689,16 @@ function ProspectsTable({
               Fit
             </th>
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden md:table-cell">
-              Sector
+              Industry
             </th>
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">
-              HQ
+              Key Challenge
             </th>
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">
-              Revenue
+              Economic Buyer
+            </th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden 2xl:table-cell">
+              HQ
             </th>
             <th className="text-right px-4 py-3 font-semibold text-bisque-800">
               Score
@@ -699,15 +708,15 @@ function ProspectsTable({
         <tbody>
           {sorted.map((company, i) => {
             const fitTag = company.tags.find((t) => t.startsWith("fit-"));
-            const sectorTags = company.tags.filter(
-              (t) =>
-                !["prospect", "eloso"].includes(t) &&
-                !t.startsWith("fit-")
-            );
             const detail = details?.get(company.id);
-            const hq = detail?.meta.find((m) => m.key === "hq")?.value;
+            const industry = detail?.meta.find((m) => m.key === "industry")?.value;
+            const location = detail?.meta.find((m) => m.key === "location")?.value;
             const revenue = detail?.meta.find((m) => m.key === "revenue")?.value;
             const employees = detail?.meta.find((m) => m.key === "employees")?.value;
+            const buyerPersona = detail?.meta.find((m) => m.key === "buyer_persona")?.value;
+            // Extract challenge from structured notes field
+            const challengeMatch = detail?.notes?.match(/Challenge:\s*(.+?)(?:\n|$)/);
+            const challenge = challengeMatch?.[1]?.trim();
             const scoreResult = scores?.get(company.id);
             return (
               <tr
@@ -738,14 +747,21 @@ function ProspectsTable({
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 hidden md:table-cell">
-                  <TagList tags={sectorTags} limit={3} />
+                <td className="px-4 py-3 hidden md:table-cell text-bisque-700 text-xs">
+                  {industry ?? "—"}
                 </td>
-                <td className="px-4 py-3 hidden lg:table-cell text-bisque-600">
-                  {hq ?? "—"}
+                <td className="px-4 py-3 hidden lg:table-cell text-bisque-600 text-xs max-w-xs">
+                  {challenge ? (
+                    <span title={challenge}>
+                      {challenge.length > 80 ? challenge.slice(0, 80) + "…" : challenge}
+                    </span>
+                  ) : "—"}
                 </td>
-                <td className="px-4 py-3 hidden xl:table-cell text-bisque-600">
-                  {revenue ?? "—"}
+                <td className="px-4 py-3 hidden xl:table-cell text-bisque-500 text-xs">
+                  {buyerPersona ?? (revenue ?? "—")}
+                </td>
+                <td className="px-4 py-3 hidden 2xl:table-cell text-bisque-600 text-xs">
+                  {location ?? "—"}
                 </td>
                 <td className="px-4 py-3 text-right">
                   {scoreResult !== undefined && (
