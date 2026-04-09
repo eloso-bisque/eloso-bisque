@@ -2,6 +2,8 @@ import Link from "next/link";
 import { fetchSegmentedContacts, searchKissinger } from "@/lib/kissinger";
 import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/lib/kissinger";
 import AddNewButton from "@/components/AddNewButton";
+import { scoreContact } from "@/lib/score-contact";
+import type { ScoreResult } from "@/lib/score-contact";
 
 // Utility: extract a meta value by key from a ContactDetail map
 function getMeta(
@@ -12,8 +14,46 @@ function getMeta(
   return details?.get(id)?.meta.find((m) => m.key === key)?.value;
 }
 
+const PAGE_SIZE = 50;
+
 interface ContactsPageProps {
-  searchParams: Promise<{ segment?: string; q?: string }>;
+  searchParams: Promise<{ segment?: string; q?: string; page?: string; sortBy?: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Score helpers
+// ---------------------------------------------------------------------------
+
+/** Build a ScoreResult from available data (no extra API calls needed). */
+function computeQuickScore(
+  contact: EntitySummary,
+  details?: Map<string, ContactDetail>
+): ScoreResult {
+  const detail = details?.get(contact.id);
+  return scoreContact({
+    id: contact.id,
+    name: contact.name,
+    kind: contact.kind,
+    tags: contact.tags,
+    notes: detail?.notes ?? "",
+    meta: detail?.meta ?? [],
+    updatedAt: contact.updatedAt,
+    // No edges or interaction data at list view level — approximation is fine
+    edges: [],
+    org_tags: [],
+  });
+}
+
+/** Compute scores for a list of contacts, returning a Map<id, ScoreResult>. */
+function computeScores(
+  contacts: EntitySummary[],
+  details?: Map<string, ContactDetail>
+): Map<string, ScoreResult> {
+  const map = new Map<string, ScoreResult>();
+  for (const c of contacts) {
+    map.set(c.id, computeQuickScore(c, details));
+  }
+  return map;
 }
 
 // Stage / check-size tags surfaced in the VC CRM view
@@ -35,6 +75,8 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
     : "people";
   const q = params.q?.trim() ?? "";
   const isSearch = q.length > 0;
+  const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
+  const sortBy = params.sortBy === "score" ? "score" : "default";
 
   // -------------------------------------------------------------------------
   // Fetch data
@@ -97,7 +139,29 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
     prospects,
     "other-orgs": otherOrgs,
   };
-  const activeContacts = segmentData[segment];
+
+  // Compute scores for the active segment (people + all use peopleDetails)
+  const relevantDetails =
+    segment === "people" || segment === "all" ? peopleDetails
+    : segment === "prospects" ? prospectDetails
+    : undefined;
+  const allScores = !offline ? computeScores(segmentData[segment], relevantDetails) : new Map<string, ScoreResult>();
+
+  // Apply sort-by-score before pagination
+  let allActiveContacts = segmentData[segment];
+  if (sortBy === "score" && !offline) {
+    allActiveContacts = [...allActiveContacts].sort((a, b) => {
+      const sa = allScores.get(a.id)?.score ?? 0;
+      const sb = allScores.get(b.id)?.score ?? 0;
+      return sb - sa; // descending
+    });
+  }
+
+  const totalCount = allActiveContacts.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages);
+  const pageStart = (clampedPage - 1) * PAGE_SIZE;
+  const activeContacts = allActiveContacts.slice(pageStart, pageStart + PAGE_SIZE);
 
   const tabs: { key: ContactSegment; label: string; count: number }[] = [
     { key: "people", label: "People", count: people.length },
@@ -121,9 +185,24 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
             {offline
               ? "Offline"
               : isSearch
-              ? `${activeContacts.length} result${activeContacts.length !== 1 ? "s" : ""}`
-              : `${activeContacts.length} shown`}
+              ? `${totalCount} result${totalCount !== 1 ? "s" : ""}`
+              : totalPages > 1
+              ? `${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, totalCount)} of ${totalCount}`
+              : `${totalCount} shown`}
           </span>
+          {!offline && (
+            <Link
+              href={`/contacts?segment=${segment}${q ? `&q=${encodeURIComponent(q)}` : ""}${sortBy === "score" ? "" : "&sortBy=score"}`}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                sortBy === "score"
+                  ? "bg-bisque-700 text-bisque-50"
+                  : "bg-bisque-100 text-bisque-700 hover:bg-bisque-200"
+              }`}
+              title="Sort by Eloso fit score"
+            >
+              ★ Score
+            </Link>
+          )}
           <AddNewButton defaultKind={segment === "vc" || segment === "prospects" || segment === "other-orgs" ? "org" : "person"} />
         </div>
       </div>
@@ -194,14 +273,128 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
       ) : segment === "vc" ? (
         <VCTable contacts={activeContacts} />
       ) : segment === "prospects" ? (
-        <ProspectsTable contacts={activeContacts} details={prospectDetails} />
+        <ProspectsTable contacts={activeContacts} details={prospectDetails} scores={allScores} />
       ) : (
         <ContactsTable
           contacts={activeContacts}
           showKind={segment === "all"}
           details={segment === "people" || segment === "all" ? peopleDetails : undefined}
+          scores={allScores}
         />
       )}
+
+      {/* Pagination */}
+      {!offline && !isSearch && totalPages > 1 && (
+        <Pagination
+          currentPage={clampedPage}
+          totalPages={totalPages}
+          segment={segment}
+          q={q}
+          sortBy={sortBy}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pagination component
+// ---------------------------------------------------------------------------
+
+function buildPageUrl(page: number, segment: ContactSegment, q: string, sortBy?: string): string {
+  const params = new URLSearchParams({ segment });
+  if (q) params.set("q", q);
+  if (sortBy === "score") params.set("sortBy", "score");
+  if (page > 1) params.set("page", String(page));
+  return `/contacts?${params.toString()}`;
+}
+
+function Pagination({
+  currentPage,
+  totalPages,
+  segment,
+  q,
+  sortBy,
+}: {
+  currentPage: number;
+  totalPages: number;
+  segment: ContactSegment;
+  q: string;
+  sortBy?: string;
+}) {
+  const hasPrev = currentPage > 1;
+  const hasNext = currentPage < totalPages;
+
+  // Show at most 5 page numbers centered around current page
+  const maxVisible = 5;
+  let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+  const endPage = Math.min(totalPages, startPage + maxVisible - 1);
+  if (endPage - startPage + 1 < maxVisible) {
+    startPage = Math.max(1, endPage - maxVisible + 1);
+  }
+  const pageNumbers = Array.from(
+    { length: endPage - startPage + 1 },
+    (_, i) => startPage + i
+  );
+
+  const btnBase =
+    "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors";
+  const btnActive = "bg-bisque-700 text-bisque-50";
+  const btnInactive = "bg-bisque-100 text-bisque-800 hover:bg-bisque-200";
+  const btnDisabled = "bg-bisque-50 text-bisque-300 cursor-not-allowed pointer-events-none";
+
+  return (
+    <div className="flex items-center justify-center gap-1.5 py-2">
+      <Link
+        href={buildPageUrl(currentPage - 1, segment, q, sortBy)}
+        aria-disabled={!hasPrev}
+        className={`${btnBase} ${hasPrev ? btnInactive : btnDisabled}`}
+      >
+        ← Prev
+      </Link>
+
+      {startPage > 1 && (
+        <>
+          <Link href={buildPageUrl(1, segment, q, sortBy)} className={`${btnBase} ${btnInactive}`}>
+            1
+          </Link>
+          {startPage > 2 && (
+            <span className="px-1 text-bisque-400 text-sm">…</span>
+          )}
+        </>
+      )}
+
+      {pageNumbers.map((n) => (
+        <Link
+          key={n}
+          href={buildPageUrl(n, segment, q, sortBy)}
+          className={`${btnBase} ${n === currentPage ? btnActive : btnInactive}`}
+        >
+          {n}
+        </Link>
+      ))}
+
+      {endPage < totalPages && (
+        <>
+          {endPage < totalPages - 1 && (
+            <span className="px-1 text-bisque-400 text-sm">…</span>
+          )}
+          <Link
+            href={buildPageUrl(totalPages, segment, q, sortBy)}
+            className={`${btnBase} ${btnInactive}`}
+          >
+            {totalPages}
+          </Link>
+        </>
+      )}
+
+      <Link
+        href={buildPageUrl(currentPage + 1, segment, q)}
+        aria-disabled={!hasNext}
+        className={`${btnBase} ${hasNext ? btnInactive : btnDisabled}`}
+      >
+        Next →
+      </Link>
     </div>
   );
 }
@@ -214,10 +407,12 @@ function ContactsTable({
   contacts,
   showKind,
   details,
+  scores,
 }: {
   contacts: EntitySummary[];
   showKind?: boolean;
   details?: Map<string, ContactDetail>;
+  scores?: Map<string, ScoreResult>;
 }) {
   return (
     <div className="bg-white rounded-xl border border-bisque-100 overflow-hidden shadow-sm">
@@ -244,12 +439,16 @@ function ContactsTable({
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">
               Updated
             </th>
+            <th className="text-right px-4 py-3 font-semibold text-bisque-800">
+              Score
+            </th>
           </tr>
         </thead>
         <tbody>
           {contacts.map((contact, i) => {
             const company = getMeta(details, contact.id, "company");
             const title = getMeta(details, contact.id, "title");
+            const scoreResult = scores?.get(contact.id);
             // Filter out internal/noisy tags from the tags column
             const displayTags = contact.tags.filter(
               (t) => !["eloso", "prospect-contact"].includes(t)
@@ -291,6 +490,13 @@ function ContactsTable({
                 </td>
                 <td className="px-4 py-3 text-bisque-500 hidden xl:table-cell">
                   {contact.updatedAt ? formatDate(contact.updatedAt) : "—"}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {scoreResult !== undefined && (
+                    <Link href={`/contacts/${encodeURIComponent(contact.id)}`}>
+                      <ScoreBadge score={scoreResult.score} />
+                    </Link>
+                  )}
                 </td>
               </tr>
             );
@@ -389,9 +595,11 @@ const FIT_COLORS: Record<string, string> = {
 function ProspectsTable({
   contacts,
   details,
+  scores,
 }: {
   contacts: EntitySummary[];
   details?: Map<string, ContactDetail>;
+  scores?: Map<string, ScoreResult>;
 }) {
   // Sort: fit-high first
   const fitOrder = ["fit-high", "fit-medium", "fit-low"];
@@ -424,6 +632,9 @@ function ProspectsTable({
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">
               Revenue
             </th>
+            <th className="text-right px-4 py-3 font-semibold text-bisque-800">
+              Score
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -438,6 +649,7 @@ function ProspectsTable({
             const hq = detail?.meta.find((m) => m.key === "hq")?.value;
             const revenue = detail?.meta.find((m) => m.key === "revenue")?.value;
             const employees = detail?.meta.find((m) => m.key === "employees")?.value;
+            const scoreResult = scores?.get(company.id);
             return (
               <tr
                 key={company.id}
@@ -476,6 +688,13 @@ function ProspectsTable({
                 <td className="px-4 py-3 hidden xl:table-cell text-bisque-600">
                   {revenue ?? "—"}
                 </td>
+                <td className="px-4 py-3 text-right">
+                  {scoreResult !== undefined && (
+                    <Link href={`/contacts/${encodeURIComponent(company.id)}`}>
+                      <ScoreBadge score={scoreResult.score} />
+                    </Link>
+                  )}
+                </td>
               </tr>
             );
           })}
@@ -488,6 +707,29 @@ function ProspectsTable({
 // ---------------------------------------------------------------------------
 // Shared sub-components
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// ScoreBadge — colored score pill (green 70+, yellow 40-69, red <40)
+// ---------------------------------------------------------------------------
+
+function ScoreBadge({ score }: { score: number }) {
+  let cls: string;
+  if (score >= 70) {
+    cls = "bg-green-100 text-green-700 border border-green-200";
+  } else if (score >= 40) {
+    cls = "bg-yellow-100 text-yellow-700 border border-yellow-200";
+  } else {
+    cls = "bg-red-100 text-red-600 border border-red-200";
+  }
+  return (
+    <span
+      className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums ${cls}`}
+      title={`Eloso fit score: ${score}/100`}
+    >
+      {score}
+    </span>
+  );
+}
 
 function KindBadge({ kind, tags }: { kind: string; tags: string[] }) {
   let label = kind;
