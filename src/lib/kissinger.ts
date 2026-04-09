@@ -26,6 +26,7 @@ async function gql<T = unknown>(
     body: JSON.stringify({ query, variables }),
     // Next.js 14 cache: revalidate every 60 seconds
     next: { revalidate: 60 },
+    signal: AbortSignal.timeout(8000),
   });
 
   if (!res.ok) {
