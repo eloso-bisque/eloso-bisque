@@ -683,3 +683,166 @@ export async function searchKissinger(
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// Outreach: fetch prospect contacts with org context
+// ---------------------------------------------------------------------------
+
+/**
+ * A prospect contact enriched with their org's sector tags.
+ * Used by the Outreach Task Engine.
+ */
+export interface ProspectContactRaw {
+  id: string;
+  name: string;
+  title: string;
+  company: string;
+  /** Sector tags from the linked org entity */
+  sector: string[];
+  fitTier: "high" | "medium" | "low";
+  notes: string;
+  /** ID of the linked org (if resolved) */
+  orgId?: string;
+}
+
+const PROSPECT_CONTACT_QUERY = `
+  query ProspectContacts($first: Int, $after: String) {
+    entities(kind: "person", first: $first, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id
+          name
+          tags
+          notes
+        }
+      }
+    }
+  }
+`;
+
+const EDGES_FROM_PERSON_QUERY = `
+  query PersonEdges($entityId: String!, $first: Int) {
+    edgesFrom(entityId: $entityId, first: $first) {
+      edges {
+        node {
+          source
+          target
+          relation
+          notes
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Fetch all prospect contacts (tagged "prospect-contact") from Kissinger,
+ * and enrich each with their org's sector tags via the works_at edge.
+ *
+ * Returns null if Kissinger is unreachable.
+ */
+export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | null> {
+  try {
+    // Fetch all person entities in pages (Kissinger has 7k+ people)
+    // We only need those tagged "prospect-contact"
+    const PAGE = 500;
+    const prospectPersons: { id: string; name: string; tags: string[]; notes: string }[] = [];
+    let cursor: string | undefined;
+    let safety = 0;
+
+    while (safety < 30) {
+      safety++;
+      const data = await gql<{
+        entities: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          edges: { node: { id: string; name: string; tags: string[]; notes: string } }[];
+        };
+      }>(PROSPECT_CONTACT_QUERY, { first: PAGE, after: cursor });
+
+      const raw = data.entities;
+      const filtered = raw.edges
+        .map((e) => e.node)
+        .filter((n) => n.tags.includes("prospect-contact"));
+      prospectPersons.push(...filtered);
+
+      if (!raw.pageInfo.hasNextPage || !raw.pageInfo.endCursor) break;
+      cursor = raw.pageInfo.endCursor;
+    }
+
+    if (prospectPersons.length === 0) return [];
+
+    // For each prospect person, fetch their entity detail (for title/company meta)
+    // and their outgoing edges to find the linked org
+    const enriched = await Promise.allSettled(
+      prospectPersons.map(async (person) => {
+        const [detail, edgesData] = await Promise.all([
+          gql<{ entity: ContactDetail }>(ENTITY_DETAIL_QUERY, { id: person.id }),
+          gql<{ edgesFrom: { edges: { node: EntityEdge }[] } }>(
+            EDGES_FROM_PERSON_QUERY,
+            { entityId: person.id, first: 20 }
+          ).catch(() => ({ edgesFrom: { edges: [] } })),
+        ]);
+
+        const meta = Object.fromEntries(
+          detail.entity.meta.map((m) => [m.key, m.value])
+        );
+        const title = meta["title"] ?? "";
+        const company = meta["company"] ?? "";
+
+        // Find the linked org via works_at edge
+        const worksAtEdge = edgesData.edgesFrom.edges
+          .map((e) => e.node)
+          .find((e) => e.relation === "works_at");
+
+        let sector: string[] = [];
+        let fitTier: "high" | "medium" | "low" = "high";
+        let orgId: string | undefined;
+
+        if (worksAtEdge) {
+          orgId = worksAtEdge.target;
+          // Fetch the org to get its sector tags
+          try {
+            const orgData = await gql<{ entity: { tags: string[] } }>(
+              `query OrgTags($id: String!) { entity(id: $id) { tags } }`,
+              { id: orgId }
+            );
+            const orgTags = orgData.entity.tags;
+            // Extract sector tags (exclude meta tags like prospect, eloso, fit-*)
+            sector = orgTags.filter(
+              (t) => !["prospect", "eloso"].includes(t) && !t.startsWith("fit-")
+            );
+            // Extract fit tier
+            const fitTag = orgTags.find((t) => t.startsWith("fit-"));
+            if (fitTag === "fit-high") fitTier = "high";
+            else if (fitTag === "fit-medium") fitTier = "medium";
+            else if (fitTag === "fit-low") fitTier = "low";
+          } catch {
+            // Org fetch failed — proceed with empty sector
+          }
+        }
+
+        return {
+          id: person.id,
+          name: person.name,
+          title,
+          company,
+          sector,
+          fitTier,
+          notes: person.notes ?? "",
+          orgId,
+        } satisfies ProspectContactRaw;
+      })
+    );
+
+    const results: ProspectContactRaw[] = [];
+    for (const r of enriched) {
+      if (r.status === "fulfilled") {
+        results.push(r.value);
+      }
+    }
+    return results;
+  } catch {
+    return null;
+  }
+}
