@@ -17,6 +17,9 @@ export default function MainLayout({
           <a href="/funnel" className="hover:text-bisque-200 transition-colors">
             Funnel
           </a>
+          <a href="/outreach" className="hover:text-bisque-200 transition-colors">
+            Outreach
+          </a>
         </nav>
       </header>
       <main className="p-6">{children}</main>
