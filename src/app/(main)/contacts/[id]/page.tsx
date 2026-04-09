@@ -2,6 +2,109 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { fetchContactDetail, classifyOrg } from "@/lib/kissinger";
 import type { ResolvedEdge, ContactDetail, PersonAtOrg } from "@/lib/kissinger";
+import NotesEditor from "@/components/NotesEditor";
+import { scoreContact } from "@/lib/score-contact";
+import type { ScoreResult, ScoringEdge } from "@/lib/score-contact";
+
+// ---------------------------------------------------------------------------
+// Server-side score computation using already-fetched contact data
+// ---------------------------------------------------------------------------
+
+const KISSINGER_API_URL =
+  process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
+const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
+
+async function gqlFetch<T = unknown>(
+  query: string,
+  variables: Record<string, unknown> = {}
+): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (KISSINGER_API_TOKEN) headers["Authorization"] = `Bearer ${KISSINGER_API_TOKEN}`;
+  const res = await fetch(KISSINGER_API_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ query, variables }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Kissinger request failed: ${res.status}`);
+  const json = (await res.json()) as { data?: T; errors?: unknown[] };
+  if (json.errors?.length) throw new Error(`Kissinger errors: ${JSON.stringify(json.errors)}`);
+  return json.data as T;
+}
+
+const INTERACTIONS_QUERY = `
+  query InteractionsForScore($entityId: String!, $first: Int) {
+    interactionsForEntity(entityId: $entityId, first: $first) {
+      edges { node { id occurredAt } }
+    }
+  }
+`;
+
+const ENTITY_TAGS_QUERY = `
+  query EntityTags($id: String!) {
+    entity(id: $id) { id tags }
+  }
+`;
+
+async function fetchContactScore(
+  contact: ContactDetail,
+  rawEdges: { target: string; relation: string; strength: number }[]
+): Promise<ScoreResult> {
+  // Fetch interactions and org tags in parallel
+  const worksAtEdges = rawEdges.filter((e) => e.relation === "works_at");
+
+  const [interactionsData, orgTagResults] = await Promise.all([
+    gqlFetch<{ interactionsForEntity: { edges: { node: { id: string; occurredAt: string } }[] } }>(
+      INTERACTIONS_QUERY,
+      { entityId: contact.id, first: 1 }
+    ).catch(() => ({ interactionsForEntity: { edges: [] } })),
+
+    Promise.allSettled(
+      worksAtEdges.map(async (edge) => {
+        const data = await gqlFetch<{ entity: { id: string; tags: string[] } }>(
+          ENTITY_TAGS_QUERY,
+          { id: edge.target }
+        );
+        return { id: edge.target, tags: data.entity.tags };
+      })
+    ),
+  ]);
+
+  const interactions = interactionsData.interactionsForEntity.edges.map((e) => e.node);
+  const mostRecentInteraction =
+    interactions.length > 0
+      ? interactions.reduce((latest, i) =>
+          Date.parse(i.occurredAt) > Date.parse(latest.occurredAt) ? i : latest
+        )
+      : null;
+
+  const orgTagsMap = new Map<string, string[]>();
+  for (const r of orgTagResults) {
+    if (r.status === "fulfilled") orgTagsMap.set(r.value.id, r.value.tags);
+  }
+
+  const orgTags: string[] = [];
+  for (const [, tags] of orgTagsMap) orgTags.push(...tags);
+
+  const scoringEdges: ScoringEdge[] = rawEdges.map((edge) => ({
+    relation: edge.relation,
+    strength: edge.strength,
+    target_tags: orgTagsMap.get(edge.target) ?? [],
+  }));
+
+  return scoreContact({
+    id: contact.id,
+    name: contact.name,
+    kind: contact.kind,
+    tags: contact.tags,
+    notes: contact.notes,
+    meta: contact.meta,
+    updatedAt: contact.updatedAt,
+    last_interaction_at: mostRecentInteraction?.occurredAt,
+    edges: scoringEdges,
+    org_tags: orgTags,
+  });
+}
 
 interface ContactDetailPageProps {
   params: Promise<{ id: string }>;
@@ -17,6 +120,12 @@ export default async function ContactDetailPage({
   if (!result) notFound();
 
   const { contact, edges, peopleAtOrg } = result;
+
+  // Compute full score (with interactions + edge enrichment)
+  const scoreResult = await fetchContactScore(
+    contact,
+    edges.map((e) => ({ target: e.target, relation: e.relation, strength: e.strength }))
+  ).catch(() => null);
 
   // For person: outbound works_at edges point to orgs
   const worksAtEdges = edges.filter((e) => e.relation === "works_at");
@@ -166,18 +275,14 @@ export default async function ContactDetailPage({
           </div>
         )}
 
-        {/* Notes */}
-        {contact.notes && (
-          <div className="mt-4 pt-4 border-t border-bisque-50">
-            <h3 className="text-xs font-semibold text-bisque-500 uppercase tracking-wide mb-2">
-              Notes
-            </h3>
-            <p className="text-bisque-800 text-sm whitespace-pre-wrap">
-              {contact.notes}
-            </p>
-          </div>
-        )}
+        {/* Notes — editable, saves on blur */}
+        <NotesEditor entityId={contact.id} initialNotes={contact.notes ?? ""} />
       </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Score section — Eloso fit score with breakdown                       */}
+      {/* ------------------------------------------------------------------ */}
+      {scoreResult && <ScoreSection result={scoreResult} />}
 
       {/* ------------------------------------------------------------------ */}
       {/* PERSON VIEW: Organisation section (outbound works_at edges)          */}
@@ -236,6 +341,107 @@ export default async function ContactDetailPage({
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ScoreSection — Eloso fit score with expandable breakdown
+// ---------------------------------------------------------------------------
+
+function ScoreSection({ result }: { result: ScoreResult }) {
+  const { score, breakdown } = result;
+
+  let badgeCls: string;
+  let label: string;
+  if (score >= 70) {
+    badgeCls = "bg-green-100 text-green-700 border border-green-200";
+    label = "Strong fit";
+  } else if (score >= 40) {
+    badgeCls = "bg-yellow-100 text-yellow-700 border border-yellow-200";
+    label = "Moderate fit";
+  } else {
+    badgeCls = "bg-red-100 text-red-600 border border-red-200";
+    label = "Weak fit";
+  }
+
+  const factors = Object.entries(breakdown).sort((a, b) => b[1].weighted - a[1].weighted);
+
+  return (
+    <section>
+      <details className="group bg-white rounded-xl border border-bisque-100 shadow-sm overflow-hidden">
+        <summary className="flex items-center justify-between px-6 py-4 cursor-pointer select-none hover:bg-bisque-50 transition-colors list-none">
+          <div className="flex items-center gap-3">
+            <h2 className="text-base font-semibold text-bisque-800">Eloso Fit Score</h2>
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-bold tabular-nums ${badgeCls}`}
+            >
+              {score}<span className="font-normal text-xs opacity-70">/100</span>
+            </span>
+            <span className={`text-xs font-medium ${score >= 70 ? "text-green-600" : score >= 40 ? "text-yellow-600" : "text-red-500"}`}>
+              {label}
+            </span>
+          </div>
+          <span className="text-bisque-400 text-sm group-open:rotate-180 transition-transform duration-200">
+            ▼
+          </span>
+        </summary>
+
+        {/* Expandable breakdown */}
+        <div className="px-6 pb-5 pt-1 border-t border-bisque-50">
+          <p className="text-xs text-bisque-500 mb-4 mt-2 italic">
+            Why this score? Each factor is scored 0–1, then weighted by importance to Eloso&apos;s ICP.
+          </p>
+
+          <div className="space-y-3">
+            {factors.map(([key, factor]) => {
+              const pct = Math.round(factor.raw * 100);
+              const weightPct = Math.round(factor.weight * 100);
+              const contribution = Math.round(factor.weighted * 100);
+              let barColor: string;
+              if (pct >= 70) barColor = "bg-green-400";
+              else if (pct >= 40) barColor = "bg-yellow-400";
+              else barColor = "bg-bisque-300";
+
+              return (
+                <div key={key} className="text-sm">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-bisque-700 font-medium">{factor.label}</span>
+                    <div className="flex items-center gap-2 text-xs text-bisque-500">
+                      <span title="Weight in overall score">{weightPct}% weight</span>
+                      <span className="text-bisque-300">·</span>
+                      <span title="Points contributed to total score" className="font-semibold text-bisque-700">
+                        +{contribution} pts
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-2 bg-bisque-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${barColor}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-bisque-500 w-9 text-right tabular-nums">
+                      {pct}%
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Score total */}
+          <div className="mt-4 pt-4 border-t border-bisque-50 flex items-center justify-between text-sm">
+            <span className="text-bisque-500 text-xs">
+              Score reflects title relevance, seniority, org type, interaction recency, network proximity, and record completeness.
+            </span>
+            <span className={`font-bold text-lg tabular-nums ${score >= 70 ? "text-green-600" : score >= 40 ? "text-yellow-600" : "text-red-500"}`}>
+              {score}
+            </span>
+          </div>
+        </div>
+      </details>
+    </section>
   );
 }
 
