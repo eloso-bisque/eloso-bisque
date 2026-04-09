@@ -5,6 +5,8 @@
  * to the browser (no NEXT_PUBLIC_ prefix).
  */
 
+import { unstable_cache } from "next/cache";
+
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
 const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
@@ -211,7 +213,7 @@ function computeVelocity(current: number, before: number): VelocityMetric {
   return { delta, pct };
 }
 
-export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | null> {
+async function _fetchKissingerFunnelData(): Promise<KissingerFunnelData | null> {
   // Cutoff: 14 days ago (UTC)
   const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -292,6 +294,16 @@ export async function fetchKissingerFunnelData(): Promise<KissingerFunnelData | 
   };
 }
 
+/**
+ * Cached version of _fetchKissingerFunnelData.
+ * TTL: 120 seconds. Tag: "funnel" — call revalidateTag("funnel") after graph mutations.
+ */
+export const fetchKissingerFunnelData = unstable_cache(
+  _fetchKissingerFunnelData,
+  ["kissinger-funnel"],
+  { revalidate: 120, tags: ["funnel"] }
+);
+
 // ---------------------------------------------------------------------------
 // Contacts list query (paginated, kind=person)
 // ---------------------------------------------------------------------------
@@ -321,10 +333,10 @@ const CONTACTS_PAGE_QUERY = `
   }
 `;
 
-export async function fetchContactsPage(
-  kind: "person" | "org" = "person",
-  first: number = 50,
-  after?: string
+async function _fetchContactsPage(
+  kind: "person" | "org",
+  first: number,
+  after: string | undefined
 ): Promise<ContactsPage | null> {
   try {
     const data = await gql<{
@@ -353,6 +365,16 @@ export async function fetchContactsPage(
     return null;
   }
 }
+
+/**
+ * Cached version of _fetchContactsPage.
+ * TTL: 60 seconds. Tag: "contacts" — call revalidateTag("contacts") after mutations.
+ */
+export const fetchContactsPage = unstable_cache(
+  _fetchContactsPage,
+  ["contacts-page"],
+  { revalidate: 60, tags: ["contacts"] }
+);
 
 // ---------------------------------------------------------------------------
 // Fetch all entities of a kind (multi-page, for segmented views)

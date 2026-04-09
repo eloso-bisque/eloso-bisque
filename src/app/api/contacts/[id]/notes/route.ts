@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -65,6 +66,7 @@ export async function PATCH(
       id: decodeURIComponent(id),
       input: { notes: body.notes },
     });
+    revalidateTag("contacts");
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("Failed to update notes:", err);

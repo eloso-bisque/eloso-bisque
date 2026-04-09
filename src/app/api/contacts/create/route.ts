@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import Anthropic from "@anthropic-ai/sdk";
 
 // ---------------------------------------------------------------------------
@@ -198,6 +199,10 @@ export async function POST(request: NextRequest) {
 
     // Step 4: Save to Kissinger
     const created = await createEntityInKissinger(kind, name, meta, enriched.notes);
+
+    // Invalidate contacts and funnel caches so the new contact appears immediately
+    revalidateTag("contacts");
+    revalidateTag("funnel");
 
     return NextResponse.json({ ok: true, entity: created });
   } catch (err) {

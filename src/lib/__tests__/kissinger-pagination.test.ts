@@ -7,6 +7,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// Mock next/cache so unstable_cache is transparent in tests (no Next.js runtime needed)
+vi.mock("next/cache", () => ({
+  unstable_cache: <T extends (...args: unknown[]) => unknown>(fn: T) => fn,
+  revalidateTag: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock global fetch
 // ---------------------------------------------------------------------------
@@ -190,5 +196,58 @@ describe("fetchContactsPage", () => {
     expect(callBody.query).toContain("value");
     // And notes
     expect(callBody.query).toContain("notes");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P2: Cache wrappers
+// ---------------------------------------------------------------------------
+
+describe("P2: unstable_cache wrapping", () => {
+  it("fetchContactsPage is wrapped with unstable_cache (transparent in tests)", async () => {
+    // unstable_cache is mocked to be transparent — the function still works correctly
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(entitiesResponse()));
+
+    const { fetchContactsPage } = await import("../kissinger");
+    const page = await fetchContactsPage("person", 50);
+    expect(page).not.toBeNull();
+    expect(page!.contacts).toHaveLength(1);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("fetchKissingerFunnelData is exported and callable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockReturnValue(
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                graphStats: {
+                  totalEntities: 100,
+                  totalEdges: 50,
+                  entitiesByKind: [
+                    { kind: "person", count: 60 },
+                    { kind: "org", count: 40 },
+                  ],
+                  edgesByType: [],
+                },
+              },
+            }),
+        } as Response)
+      )
+    );
+
+    const { fetchKissingerFunnelData } = await import("../kissinger");
+    const data = await fetchKissingerFunnelData();
+
+    expect(data).not.toBeNull();
+    expect(data!.totalContacts).toBe(60);
+    expect(data!.totalOrgs).toBe(40);
+    expect(data!.stats.entitiesByKind["person"]).toBe(60);
+
+    vi.unstubAllGlobals();
   });
 });

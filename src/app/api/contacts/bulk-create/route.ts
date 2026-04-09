@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { parseCsv, type ParsedContact } from "@/lib/csv-parse";
 
 // ---------------------------------------------------------------------------
@@ -154,6 +155,12 @@ export async function POST(request: NextRequest) {
         reason: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  // Invalidate contacts and funnel caches if any contacts were created
+  if (created > 0) {
+    revalidateTag("contacts");
+    revalidateTag("funnel");
   }
 
   return NextResponse.json<BulkCreateResult>({
