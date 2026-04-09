@@ -86,7 +86,7 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
   return (
     <div className="bg-white rounded-xl border border-bisque-100 shadow-sm overflow-hidden">
       {/* Card header */}
-      <div className="px-5 py-4">
+      <div className="px-4 md:px-5 py-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
@@ -119,8 +119,8 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
             )}
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+          {/* Desktop action buttons */}
+          <div className="hidden md:flex items-center gap-2 shrink-0 flex-wrap justify-end">
             {claudeEnabled && displayMessage.source === "template" && (
               <button
                 onClick={handlePersonalize}
@@ -156,12 +156,74 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
         {personalizeError && (
           <p className="text-xs text-amber-600 mt-2">{personalizeError}</p>
         )}
+
+        {/* Mobile: big Copy Message button always visible */}
+        <div className="flex md:hidden gap-2 mt-3">
+          {claudeEnabled && displayMessage.source === "template" && (
+            <button
+              onClick={handlePersonalize}
+              disabled={personalizing}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 min-h-[44px] text-sm font-medium rounded-lg bg-violet-50 border border-violet-200 text-violet-700 transition-colors focus:outline-none disabled:opacity-50"
+            >
+              {personalizing ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Personalizing…
+                </>
+              ) : (
+                <>✦ AI</>
+              )}
+            </button>
+          )}
+          <button
+            onClick={handleCopy}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] text-sm font-semibold rounded-lg transition-colors focus:outline-none ${
+              copied
+                ? "bg-green-100 text-green-700 border border-green-200"
+                : "bg-bisque-700 text-bisque-50"
+            }`}
+            aria-label="Copy LinkedIn message to clipboard"
+          >
+            {copied ? (
+              <>
+                <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+                Copied!
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
+                  <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
+                </svg>
+                Copy Message
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="flex items-center justify-center px-3 py-2.5 min-h-[44px] rounded-lg border border-bisque-200 text-bisque-700 transition-colors focus:outline-none"
+            aria-label={expanded ? "Hide message preview" : "Show message preview"}
+          >
+            <svg
+              className={`w-5 h-5 transition-transform ${expanded ? "rotate-180" : ""}`}
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Expandable message panel */}
       {expanded && (
-        <div className="border-t border-bisque-100 bg-bisque-50/50 px-5 py-4 space-y-3">
-          {/* Angle badge + copy button */}
+        <div className="border-t border-bisque-100 bg-bisque-50/50 px-4 md:px-5 py-4 space-y-3">
+          {/* Angle badge + copy button (desktop) */}
           <div className="flex items-center justify-between flex-wrap gap-2">
             <span className="text-xs font-medium text-bisque-500 uppercase tracking-wide">
               LinkedIn outreach — {angleLabels[displayMessage.angle] ?? displayMessage.angle}
@@ -169,9 +231,10 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
                 <span className="ml-2 text-violet-500">· AI-personalized</span>
               )}
             </span>
+            {/* Desktop copy button inside expanded panel */}
             <button
               onClick={handleCopy}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-bisque-400 ${
+              className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-bisque-400 ${
                 copied
                   ? "bg-green-100 text-green-700 border border-green-200"
                   : "bg-bisque-700 text-bisque-50 hover:bg-bisque-600"
@@ -181,11 +244,7 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
               {copied ? (
                 <>
                   <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-                    <path
-                      fillRule="evenodd"
-                      d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                      clipRule="evenodd"
-                    />
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                   </svg>
                   Copied!
                 </>

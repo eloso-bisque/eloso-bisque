@@ -23,8 +23,38 @@ export default function OutreachPageClient({
 
   return (
     <div className="space-y-4">
-      {/* Tab bar */}
-      <div className="flex gap-1 border-b border-bisque-200">
+      {/* Mobile: horizontally scrollable pill tabs */}
+      <div className="md:hidden">
+        <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+          {teamMembers.map((member) => (
+            <button
+              key={member}
+              onClick={() => setActive(member)}
+              className={`flex-shrink-0 flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm font-semibold min-h-[44px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-bisque-400 ${
+                active === member
+                  ? "bg-bisque-700 text-bisque-50"
+                  : "bg-bisque-100 text-bisque-600"
+              }`}
+              aria-selected={active === member}
+              role="tab"
+            >
+              {member}
+              <span
+                className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${
+                  active === member
+                    ? "bg-bisque-600 text-bisque-100"
+                    : "bg-bisque-200 text-bisque-500"
+                }`}
+              >
+                {taskCounts[member]}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Desktop: original tab bar (hidden on mobile) */}
+      <div className="hidden md:flex gap-1 border-b border-bisque-200">
         {teamMembers.map((member) => (
           <button
             key={member}
