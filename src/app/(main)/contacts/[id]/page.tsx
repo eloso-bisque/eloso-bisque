@@ -4,6 +4,7 @@ import { fetchContactDetail, classifyOrg } from "@/lib/kissinger";
 import type { ResolvedEdge, ContactDetail, PersonAtOrg } from "@/lib/kissinger";
 import NotesEditor from "@/components/NotesEditor";
 import EnrichButton from "@/components/EnrichButton";
+import MobileEnrichSection from "@/components/MobileEnrichSection";
 import { scoreContact } from "@/lib/score-contact";
 import type { ScoreResult, ScoringEdge } from "@/lib/score-contact";
 
@@ -156,21 +157,20 @@ export default async function ContactDetailPage({
       : "/contacts?segment=other-orgs";
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-3xl mx-auto space-y-4 md:space-y-6">
       {/* Breadcrumb */}
       <nav className="text-sm text-bisque-500">
         <Link href={backHref} className="hover:text-bisque-700 hover:underline">
-          Contacts
+          ← Contacts
         </Link>
-        <span className="mx-2">/</span>
-        <span className="text-bisque-800">{contact.name}</span>
       </nav>
 
       {/* Header card */}
-      <div className="bg-white rounded-xl border border-bisque-100 shadow-sm p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold text-bisque-900 leading-tight">
+      <div className="bg-white rounded-xl border border-bisque-100 shadow-sm p-4 md:p-6">
+        {/* On mobile: name/info stacked; on desktop: side-by-side with enrich */}
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 md:gap-4">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl md:text-2xl font-bold text-bisque-900 leading-tight">
               {contact.name}
             </h1>
             {/* Person: show title and org */}
@@ -219,12 +219,20 @@ export default async function ContactDetailPage({
               )}
             </div>
           </div>
-          <div className="flex flex-col items-end gap-2 shrink-0">
+
+          {/* Desktop: enrich + timestamps in top-right */}
+          <div className="hidden md:flex flex-col items-end gap-2 shrink-0">
             <div className="text-right text-xs text-bisque-400">
               <p>Updated {formatDate(contact.updatedAt)}</p>
               <p className="mt-0.5">Added {formatDate(contact.createdAt)}</p>
             </div>
             <EnrichButton contactId={contact.id} />
+          </div>
+
+          {/* Mobile: timestamps below name, inline small */}
+          <div className="flex md:hidden text-xs text-bisque-400 gap-4">
+            <span>Updated {formatDate(contact.updatedAt)}</span>
+            <span>Added {formatDate(contact.createdAt)}</span>
           </div>
         </div>
 
@@ -281,6 +289,11 @@ export default async function ContactDetailPage({
 
         {/* Notes — editable, saves on blur */}
         <NotesEditor entityId={contact.id} initialNotes={contact.notes ?? ""} />
+
+        {/* Mobile: prominent Enrich button at bottom of header card */}
+        <div className="md:hidden mt-4 pt-4 border-t border-bisque-50">
+          <MobileEnrichSection contactId={contact.id} />
+        </div>
       </div>
 
       {/* ------------------------------------------------------------------ */}
