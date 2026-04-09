@@ -9,6 +9,7 @@ import {
 import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/lib/kissinger";
 import AddNewButton from "@/components/AddNewButton";
 import ContactCard from "@/components/ContactCard";
+import LazyScoreBadge from "@/components/LazyScoreBadge";
 import { scoreProspect } from "@/lib/score-prospect";
 import type { ProspectScoreResult } from "@/lib/score-prospect";
 
@@ -509,7 +510,7 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
             {segment === "vc" ? (
               <VCTable contacts={contacts} />
             ) : segment === "prospects" ? (
-              <ProspectsTable contacts={contacts} />
+              <ProspectsTable contacts={contacts} prospectScores={prospectScores} />
             ) : (
               <ContactsTable
                 contacts={contacts}
@@ -702,13 +703,7 @@ function ContactsTable({
                   {contact.updatedAt ? formatDate(contact.updatedAt) : "—"}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  {/* Score is lazy-loaded client-side (see P1b) */}
-                  <span
-                    className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums bg-bisque-50 text-bisque-400 border border-bisque-100"
-                    title="Score loads on demand"
-                  >
-                    —
-                  </span>
+                  <LazyScoreBadge contactId={contact.id} />
                 </td>
               </tr>
             );
@@ -802,16 +797,27 @@ const FIT_COLORS: Record<string, string> = {
   "fit-low": "bg-bisque-100 text-bisque-600",
 };
 
-function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
-  const fitOrder = ["fit-high", "fit-medium", "fit-low"];
-  const sorted = [...contacts].sort((a, b) => {
-    const aFit = fitOrder.findIndex((f) => a.tags.includes(f));
-    const bFit = fitOrder.findIndex((f) => b.tags.includes(f));
-    const aIdx = aFit === -1 ? 99 : aFit;
-    const bIdx = bFit === -1 ? 99 : bFit;
-    if (aIdx !== bIdx) return aIdx - bIdx;
-    return a.name.localeCompare(b.name);
-  });
+function ProspectsTable({
+  contacts,
+  prospectScores,
+}: {
+  contacts: EntitySummary[];
+  prospectScores?: Map<string, ProspectScoreResult>;
+}) {
+  // If scores available, sorted externally; otherwise sort by fit tag
+  const sorted = prospectScores
+    ? contacts // already sorted by caller (score sort) or unsorted (default)
+    : (() => {
+        const fitOrder = ["fit-high", "fit-medium", "fit-low"];
+        return [...contacts].sort((a, b) => {
+          const aFit = fitOrder.findIndex((f) => a.tags.includes(f));
+          const bFit = fitOrder.findIndex((f) => b.tags.includes(f));
+          const aIdx = aFit === -1 ? 99 : aFit;
+          const bIdx = bFit === -1 ? 99 : bFit;
+          if (aIdx !== bIdx) return aIdx - bIdx;
+          return a.name.localeCompare(b.name);
+        });
+      })();
 
   return (
     <div className="bg-white rounded-xl border border-bisque-100 overflow-hidden shadow-sm">
@@ -822,9 +828,9 @@ function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden sm:table-cell">Fit</th>
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden md:table-cell">Industry</th>
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">Key Challenge</th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">Economic Buyer</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">SC Connections</th>
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden 2xl:table-cell">HQ</th>
-            <th className="text-right px-4 py-3 font-semibold text-bisque-800">Score</th>
+            <th className="text-right px-4 py-3 font-semibold text-bisque-800">ICP Score</th>
           </tr>
         </thead>
         <tbody>
@@ -832,11 +838,14 @@ function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
             const fitTag = company.tags.find((t) => t.startsWith("fit-"));
             const industry = getMeta(company, "industry");
             const location = getMeta(company, "location");
-            const revenue = getMeta(company, "revenue");
             const employees = getMeta(company, "employees");
-            const buyerPersona = getMeta(company, "buyer_persona");
             const challengeMatch = company.notes?.match(/Challenge:\s*(.+?)(?:\n|$)/);
             const challenge = challengeMatch?.[1]?.trim();
+            // Supply chain connections
+            const knownSuppliers = parseInt(getMeta(company, "known_suppliers") ?? "0", 10) || 0;
+            const knownCustomers = parseInt(getMeta(company, "known_customers") ?? "0", 10) || 0;
+            const scConnections = knownSuppliers + knownCustomers;
+            const icpScore = prospectScores?.get(company.id);
             return (
               <tr
                 key={company.id}
@@ -877,19 +886,32 @@ function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
                   ) : "—"}
                 </td>
                 <td className="px-4 py-3 hidden xl:table-cell text-bisque-500 text-xs">
-                  {buyerPersona ?? (revenue ?? "—")}
+                  {scConnections > 0 ? (
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={`${knownSuppliers} suppliers · ${knownCustomers} customers`}
+                    >
+                      <span className="font-semibold text-bisque-700">{scConnections}</span>
+                      <span className="text-bisque-400">links</span>
+                    </span>
+                  ) : "—"}
                 </td>
                 <td className="px-4 py-3 hidden 2xl:table-cell text-bisque-600 text-xs">
                   {location ?? "—"}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  {/* Score is lazy-loaded (P1b) */}
-                  <span
-                    className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums bg-bisque-50 text-bisque-400 border border-bisque-100"
-                    title="Score loads on demand"
-                  >
-                    —
-                  </span>
+                  {icpScore !== undefined ? (
+                    <Link href={`/contacts/${encodeURIComponent(company.id)}`}>
+                      <ICPScoreBadge score={icpScore.icp_score} />
+                    </Link>
+                  ) : (
+                    <span
+                      className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums bg-bisque-50 text-bisque-400 border border-bisque-100"
+                      title="Score loads on demand"
+                    >
+                      —
+                    </span>
+                  )}
                 </td>
               </tr>
             );
@@ -903,6 +925,26 @@ function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
 // ---------------------------------------------------------------------------
 // Shared sub-components
 // ---------------------------------------------------------------------------
+
+/** ICP score badge — same color scale as contact score badge */
+function ICPScoreBadge({ score }: { score: number }) {
+  let cls: string;
+  if (score >= 70) {
+    cls = "bg-green-100 text-green-700 border border-green-200";
+  } else if (score >= 40) {
+    cls = "bg-yellow-100 text-yellow-700 border border-yellow-200";
+  } else {
+    cls = "bg-red-100 text-red-600 border border-red-200";
+  }
+  return (
+    <span
+      className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums ${cls}`}
+      title={`ICP score: ${score}/100`}
+    >
+      {score}
+    </span>
+  );
+}
 
 function KindBadge({ kind, tags }: { kind: string; tags: string[] }) {
   let label = kind;
