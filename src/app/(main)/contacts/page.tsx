@@ -1,13 +1,28 @@
 import Link from "next/link";
-import { fetchSegmentedContacts, searchKissinger } from "@/lib/kissinger";
+import {
+  fetchContactsPage,
+  fetchKissingerFunnelData,
+  searchKissinger,
+  classifyOrg,
+  INVESTOR_PERSON_TAGS,
+} from "@/lib/kissinger";
 import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/lib/kissinger";
 import AddNewButton from "@/components/AddNewButton";
-import { scoreContact } from "@/lib/score-contact";
-import type { ScoreResult } from "@/lib/score-contact";
 import ContactCard from "@/components/ContactCard";
+import { scoreProspect } from "@/lib/score-prospect";
+import type { ProspectScoreResult } from "@/lib/score-prospect";
 
-// Utility: extract a meta value by key from a ContactDetail map
-function getMeta(
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Extract a meta value from an EntitySummary's inline meta array. */
+function getMeta(entity: EntitySummary, key: string): string | undefined {
+  return entity.meta?.find((m) => m.key === key)?.value;
+}
+
+/** Extract a meta value from a ContactDetail map (legacy — kept for search path). */
+function getMetaFromMap(
   details: Map<string, ContactDetail> | undefined,
   id: string,
   key: string
@@ -18,52 +33,63 @@ function getMeta(
 const PAGE_SIZE = 50;
 
 interface ContactsPageProps {
-  searchParams: Promise<{ segment?: string; q?: string; page?: string; sortBy?: string }>;
+  searchParams: Promise<{
+    segment?: string;
+    q?: string;
+    after?: string;
+    sortBy?: string;
+    /** Prospect-specific filters */
+    vertical?: string;
+    stage?: string;
+  }>;
 }
 
 // ---------------------------------------------------------------------------
-// Score helpers
+// ICP scoring helpers for prospects
 // ---------------------------------------------------------------------------
 
-/** Build a ScoreResult from available data (no extra API calls needed). */
-function computeQuickScore(
-  contact: EntitySummary,
-  details?: Map<string, ContactDetail>
-): ScoreResult {
-  const detail = details?.get(contact.id);
-  return scoreContact({
-    id: contact.id,
-    name: contact.name,
-    kind: contact.kind,
-    tags: contact.tags,
-    notes: detail?.notes ?? "",
-    meta: detail?.meta ?? [],
-    updatedAt: contact.updatedAt,
-    // No edges or interaction data at list view level — approximation is fine
+/** Compute an ICP score for a prospect EntitySummary. */
+function computeProspectScore(entity: EntitySummary): ProspectScoreResult {
+  return scoreProspect({
+    id: entity.id,
+    name: entity.name,
+    kind: entity.kind,
+    tags: entity.tags,
+    notes: entity.notes ?? "",
+    meta: entity.meta ?? [],
     edges: [],
-    org_tags: [],
+    people: [],
   });
 }
 
-/** Compute scores for a list of contacts, returning a Map<id, ScoreResult>. */
-function computeScores(
-  contacts: EntitySummary[],
-  details?: Map<string, ContactDetail>
-): Map<string, ScoreResult> {
-  const map = new Map<string, ScoreResult>();
+/** Compute ICP scores for all prospects, returning a Map<id, ProspectScoreResult>. */
+function computeProspectScores(contacts: EntitySummary[]): Map<string, ProspectScoreResult> {
+  const map = new Map<string, ProspectScoreResult>();
   for (const c of contacts) {
-    map.set(c.id, computeQuickScore(c, details));
+    map.set(c.id, computeProspectScore(c));
   }
   return map;
 }
 
-// Stage / check-size tags surfaced in the VC CRM view
-const VC_STAGE_TAGS = new Set([
-  "seed", "pre-seed", "series-a", "series-b", "series-c", "growth",
-  "late-stage", "venture", "corporate-vc", "family-office", "accelerator",
-  "company-builder",
-]);
-const VC_PRIORITY_TAGS = new Set(["priority", "tier-1", "tier-2"]);
+// Vertical tag groups for the filter dropdown
+const VERTICAL_FILTER_OPTIONS: { value: string; label: string; tags: string[] }[] = [
+  { value: "aerospace-defense", label: "Aerospace & Defense", tags: ["aerospace", "defense", "aerospace-defense"] },
+  { value: "heavy-equipment", label: "Heavy Equipment", tags: ["heavy-equipment", "heavy_equipment"] },
+  { value: "contract-manufacturing", label: "Contract Manufacturing", tags: ["contract-manufacturing", "contract_manufacturing"] },
+  { value: "capital-goods", label: "Capital Goods", tags: ["capital-goods", "capital_goods"] },
+  { value: "rail", label: "Rail", tags: ["rail", "railroad", "railway"] },
+  { value: "chemicals", label: "Chemicals", tags: ["chemicals", "chemical"] },
+  { value: "manufacturing", label: "General Manufacturing", tags: ["manufacturing"] },
+  { value: "industrial", label: "Industrial", tags: ["industrial"] },
+];
+
+// Pipeline stage tag options
+const STAGE_FILTER_OPTIONS: { value: string; label: string; tag: string }[] = [
+  { value: "research", label: "Research", tag: "research" },
+  { value: "contacted", label: "Contacted", tag: "contacted" },
+  { value: "engaged", label: "Engaged", tag: "engaged" },
+  { value: "qualified", label: "Qualified", tag: "qualified" },
+];
 
 function isValidSegment(v: string | undefined): v is ContactSegment {
   return ["all", "people", "vc", "prospects", "other-orgs"].includes(v ?? "");
@@ -76,20 +102,30 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
     : "people";
   const q = params.q?.trim() ?? "";
   const isSearch = q.length > 0;
-  const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
+  const afterCursor = params.after ?? undefined;
   const sortBy = params.sortBy === "score" ? "score" : "default";
+  // Prospect-specific filter params
+  const verticalFilter = params.vertical ?? "";
+  const stageFilter = params.stage ?? "";
 
   // -------------------------------------------------------------------------
-  // Fetch data
+  // Fetch data — paginated or search
   // -------------------------------------------------------------------------
-  let people: EntitySummary[] = [];
-  let vc: EntitySummary[] = [];
-  let prospects: EntitySummary[] = [];
-  let otherOrgs: EntitySummary[] = [];
-  let prospectDetails: Map<string, ContactDetail> = new Map();
-  let peopleDetails: Map<string, ContactDetail> = new Map();
+  let contacts: EntitySummary[] = [];
+  let hasNextPage = false;
+  let endCursor: string | null = null;
+  let hasPreviousPage = false;
   let offline = false;
   let searchHits: SearchHit[] = [];
+
+  // Tab counts from graphStats (fast — 1 request)
+  let tabCounts: Record<ContactSegment, number> = {
+    people: 0,
+    vc: 0,
+    prospects: 0,
+    "other-orgs": 0,
+    all: 0,
+  };
 
   if (isSearch) {
     const hits = await searchKissinger(q, 200);
@@ -103,78 +139,185 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
       updatedAt: "",
       archived: false,
     }));
-    people = mapped.filter((e) => e.kind === "person");
+
+    // Filter to segment
+    const people = mapped.filter(
+      (e) => e.kind === "person" && !e.tags.some((t) => INVESTOR_PERSON_TAGS.has(t))
+    );
     const allOrgs = mapped.filter((e) => e.kind === "org");
+    const vc: EntitySummary[] = [];
+    const prospects: EntitySummary[] = [];
+    const otherOrgs: EntitySummary[] = [];
     for (const org of allOrgs) {
-      const seg = org.tags.some((t) => ["vc", "investor"].includes(t))
-        ? "vc"
-        : org.tags.includes("prospect")
-        ? "prospect"
-        : "other";
+      const seg = classifyOrg(org.tags);
       if (seg === "vc") vc.push(org);
-      else if (seg === "prospect") prospects.push(org);
+      else if (seg === "prospects") prospects.push(org);
       else otherOrgs.push(org);
     }
-    void searchHits; // used for total count below
+
+    tabCounts = {
+      people: people.length,
+      vc: vc.length,
+      prospects: prospects.length,
+      "other-orgs": otherOrgs.length,
+      all: mapped.length,
+    };
+
+    const segMap: Record<ContactSegment, EntitySummary[]> = {
+      people,
+      vc,
+      prospects,
+      "other-orgs": otherOrgs,
+      all: mapped,
+    };
+    contacts = segMap[segment];
+    void searchHits;
   } else {
-    const result = await fetchSegmentedContacts();
-    if (!result) {
+    // Fetch tab counts from graphStats (1 fast query)
+    const funnelData = await fetchKissingerFunnelData();
+    if (!funnelData) {
       offline = true;
     } else {
-      people = result.people;
-      vc = result.vc;
-      prospects = result.prospects;
-      otherOrgs = result.otherOrgs;
-      prospectDetails = result.prospectDetails;
-      peopleDetails = result.peopleDetails;
+      const personCount = funnelData.stats.entitiesByKind["person"] ?? 0;
+      const orgCount = funnelData.stats.entitiesByKind["org"] ?? 0;
+      // We don't know exact vc/prospects/other-orgs split without fetching all orgs.
+      // Show person count for People tab, org count for sub-tabs (approximation).
+      tabCounts = {
+        people: personCount,
+        vc: 0, // unknown without full fetch
+        prospects: 0, // unknown without full fetch
+        "other-orgs": orgCount, // approximate: all orgs shown here initially
+        all: personCount + orgCount,
+      };
+    }
+
+    if (!offline) {
+      // Determine which kind to fetch
+      const kind = segment === "people" ? "person" : "org";
+
+      if (segment === "all") {
+        // Fetch both kinds in parallel, interleave results
+        const [peoplePage, orgsPage] = await Promise.all([
+          fetchContactsPage("person", Math.ceil(PAGE_SIZE / 2), afterCursor),
+          fetchContactsPage("org", Math.floor(PAGE_SIZE / 2), afterCursor),
+        ]);
+        if (!peoplePage && !orgsPage) {
+          offline = true;
+        } else {
+          // Filter investor people out of contacts page
+          const filteredPeople = (peoplePage?.contacts ?? []).filter(
+            (p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t))
+          );
+          contacts = [...filteredPeople, ...(orgsPage?.contacts ?? [])];
+          // Sort alphabetically
+          contacts.sort((a, b) => a.name.localeCompare(b.name));
+          hasNextPage = (peoplePage?.hasNextPage ?? false) || (orgsPage?.hasNextPage ?? false);
+          endCursor = peoplePage?.endCursor ?? orgsPage?.endCursor ?? null;
+          hasPreviousPage = !!afterCursor;
+        }
+      } else {
+        const page = await fetchContactsPage(kind, PAGE_SIZE, afterCursor);
+        if (!page) {
+          offline = true;
+        } else {
+          let raw = page.contacts;
+
+          // Apply segment filter for org sub-segments
+          if (segment === "vc") {
+            raw = raw.filter((e) => classifyOrg(e.tags) === "vc");
+          } else if (segment === "prospects") {
+            raw = raw.filter((e) => classifyOrg(e.tags) === "prospects");
+          } else if (segment === "other-orgs") {
+            raw = raw.filter((e) => classifyOrg(e.tags) === "other-orgs");
+          } else if (segment === "people") {
+            // Exclude investor-tagged people
+            raw = raw.filter((p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t)));
+          }
+
+          contacts = raw;
+          hasNextPage = page.hasNextPage;
+          endCursor = page.endCursor;
+          hasPreviousPage = !!afterCursor;
+        }
+      }
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Pick active list
-  // -------------------------------------------------------------------------
-  const segmentData: Record<ContactSegment, EntitySummary[]> = {
-    all: [...people, ...vc, ...prospects, ...otherOrgs],
-    people,
-    vc,
-    prospects,
-    "other-orgs": otherOrgs,
-  };
+  // ---------------------------------------------------------------------------
+  // Prospect-specific: compute ICP scores, apply vertical/stage filters, sort
+  // ---------------------------------------------------------------------------
+  let prospectScores = new Map<string, ProspectScoreResult>();
+  let prospectQuickStats = { total: 0, classified: 0, withSupplyChainData: 0 };
 
-  // Compute scores for the active segment (people + all use peopleDetails)
-  const relevantDetails =
-    segment === "people" || segment === "all" ? peopleDetails
-    : segment === "prospects" ? prospectDetails
-    : undefined;
-  const allScores = !offline ? computeScores(segmentData[segment], relevantDetails) : new Map<string, ScoreResult>();
+  if (segment === "prospects" && !offline) {
+    // Compute ICP scores for all loaded prospects
+    prospectScores = computeProspectScores(contacts);
 
-  // Apply sort-by-score before pagination
-  let allActiveContacts = segmentData[segment];
-  if (sortBy === "score" && !offline) {
-    allActiveContacts = [...allActiveContacts].sort((a, b) => {
-      const sa = allScores.get(a.id)?.score ?? 0;
-      const sb = allScores.get(b.id)?.score ?? 0;
-      return sb - sa; // descending
-    });
+    // Apply vertical filter (client-side on current page)
+    if (verticalFilter) {
+      const option = VERTICAL_FILTER_OPTIONS.find((o) => o.value === verticalFilter);
+      if (option) {
+        contacts = contacts.filter((c) =>
+          option.tags.some((tag) => c.tags.includes(tag)) ||
+          (c.meta ?? []).some((m) => m.key === "industry" && option.tags.some((t) =>
+            m.value.toLowerCase().includes(t.replace(/-/g, " "))
+          ))
+        );
+      }
+    }
+
+    // Apply stage filter
+    if (stageFilter) {
+      contacts = contacts.filter((c) => c.tags.includes(stageFilter));
+    }
+
+    // Sort by ICP score (descending)
+    if (sortBy === "score") {
+      contacts = [...contacts].sort((a, b) => {
+        const sa = prospectScores.get(a.id)?.icp_score ?? 0;
+        const sb = prospectScores.get(b.id)?.icp_score ?? 0;
+        return sb - sa;
+      });
+    }
+
+    // Quick stats (computed before filters to show totals for full page)
+    const allLoaded = contacts;
+    prospectQuickStats = {
+      total: allLoaded.length,
+      classified: allLoaded.filter((c) => {
+        const industry = (c.meta ?? []).find((m) => m.key === "industry")?.value ?? "";
+        const hasTier = VERTICAL_FILTER_OPTIONS.some((opt) =>
+          opt.tags.some((t) => c.tags.includes(t)) ||
+          (industry && opt.tags.some((tag) => industry.toLowerCase().includes(tag.replace(/-/g, " "))))
+        );
+        return hasTier;
+      }).length,
+      withSupplyChainData: allLoaded.filter((c) => {
+        const suppliers = parseInt((c.meta ?? []).find((m) => m.key === "known_suppliers")?.value ?? "0", 10);
+        const customers = parseInt((c.meta ?? []).find((m) => m.key === "known_customers")?.value ?? "0", 10);
+        return suppliers + customers > 0;
+      }).length,
+    };
   }
 
-  const totalCount = allActiveContacts.length;
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
-  const clampedPage = Math.min(page, totalPages);
-  const pageStart = (clampedPage - 1) * PAGE_SIZE;
-  const activeContacts = allActiveContacts.slice(pageStart, pageStart + PAGE_SIZE);
+  const totalCount = contacts.length;
 
-  const tabs: { key: ContactSegment; label: string; count: number }[] = [
-    { key: "people", label: "People", count: people.length },
-    { key: "vc", label: "VC Firms", count: vc.length },
-    { key: "prospects", label: "Prospects", count: prospects.length },
-    { key: "other-orgs", label: "Other Orgs", count: otherOrgs.length },
-    {
-      key: "all",
-      label: "All",
-      count: people.length + vc.length + prospects.length + otherOrgs.length,
-    },
+  const tabs: { key: ContactSegment; label: string; count: number | null }[] = [
+    { key: "people", label: "People", count: tabCounts.people || null },
+    { key: "vc", label: "VC Firms", count: null },
+    { key: "prospects", label: "Prospects", count: null },
+    { key: "other-orgs", label: "Other Orgs", count: null },
+    { key: "all", label: "All", count: tabCounts.all || null },
   ];
+
+  // Build next/prev cursor URLs
+  const nextHref =
+    hasNextPage && endCursor
+      ? buildCursorUrl(segment, q, endCursor, sortBy, verticalFilter, stageFilter)
+      : null;
+  const prevHref = hasPreviousPage
+    ? buildCursorUrl(segment, q, undefined, sortBy, verticalFilter, stageFilter)
+    : null;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -187,24 +330,37 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
               ? "Offline"
               : isSearch
               ? `${totalCount} result${totalCount !== 1 ? "s" : ""}`
-              : totalPages > 1
-              ? `${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, totalCount)} of ${totalCount}`
               : `${totalCount} shown`}
           </span>
           {!offline && (
             <Link
-              href={`/contacts?segment=${segment}${q ? `&q=${encodeURIComponent(q)}` : ""}${sortBy === "score" ? "" : "&sortBy=score"}`}
+              href={buildCursorUrl(
+                segment,
+                q,
+                afterCursor,
+                sortBy === "score" ? undefined : "score",
+                verticalFilter,
+                stageFilter
+              )}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                 sortBy === "score"
                   ? "bg-bisque-700 text-bisque-50"
                   : "bg-bisque-100 text-bisque-700 hover:bg-bisque-200"
               }`}
-              title="Sort by Eloso fit score"
+              title="Sort by ICP / fit score"
             >
               ★ Score
             </Link>
           )}
-          <AddNewButton defaultKind={segment === "vc" || segment === "prospects" || segment === "other-orgs" ? "org" : "person"} />
+          <AddNewButton
+            defaultKind={
+              segment === "vc" ||
+              segment === "prospects" ||
+              segment === "other-orgs"
+                ? "org"
+                : "person"
+            }
+          />
         </div>
       </div>
 
@@ -247,7 +403,7 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
             }`}
           >
             {tab.label}
-            {!offline && (
+            {!offline && tab.count !== null && (
               <span
                 className={`text-xs px-1.5 py-0.5 rounded-full ${
                   segment === tab.key
@@ -255,19 +411,89 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
                     : "bg-bisque-200 text-bisque-600"
                 }`}
               >
-                {tab.count}
+                {tab.count.toLocaleString()}
               </span>
             )}
           </Link>
         ))}
       </div>
 
+      {/* Prospect-specific: vertical filter + stage filter + quick stats */}
+      {segment === "prospects" && !offline && (
+        <>
+          {/* Filter bar */}
+          <div className="flex flex-wrap gap-2 items-center">
+            {/* Vertical filter */}
+            <form method="GET" action="/contacts" className="contents">
+              <input type="hidden" name="segment" value="prospects" />
+              {q && <input type="hidden" name="q" value={q} />}
+              {sortBy === "score" && <input type="hidden" name="sortBy" value="score" />}
+              {stageFilter && <input type="hidden" name="stage" value={stageFilter} />}
+              <select
+                name="vertical"
+                defaultValue={verticalFilter}
+                onChange={undefined}
+                className="px-3 py-1.5 rounded-lg border border-bisque-200 bg-white text-bisque-800 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-bisque-400"
+                aria-label="Filter by vertical"
+              >
+                <option value="">All Verticals</option>
+                {VERTICAL_FILTER_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              {/* Stage filter */}
+              <select
+                name="stage"
+                defaultValue={stageFilter}
+                className="px-3 py-1.5 rounded-lg border border-bisque-200 bg-white text-bisque-800 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-bisque-400"
+                aria-label="Filter by pipeline stage"
+              >
+                <option value="">All Stages</option>
+                {STAGE_FILTER_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                className="px-3 py-1.5 bg-bisque-700 text-bisque-50 rounded-lg text-xs font-medium hover:bg-bisque-600 transition-colors"
+              >
+                Apply
+              </button>
+              {(verticalFilter || stageFilter) && (
+                <Link
+                  href={buildCursorUrl("prospects", q, undefined, sortBy)}
+                  className="px-3 py-1.5 bg-bisque-100 text-bisque-700 rounded-lg text-xs font-medium hover:bg-bisque-200 transition-colors"
+                >
+                  Clear filters
+                </Link>
+              )}
+            </form>
+          </div>
+
+          {/* Quick stats bar */}
+          <div className="flex flex-wrap gap-3 text-sm text-bisque-600 bg-bisque-50 rounded-xl px-4 py-2.5 border border-bisque-100">
+            <span className="font-semibold text-bisque-900">{prospectQuickStats.total}</span>
+            <span>prospects</span>
+            <span className="text-bisque-300">·</span>
+            <span className="font-semibold text-bisque-900">{prospectQuickStats.classified}</span>
+            <span>classified</span>
+            <span className="text-bisque-300">·</span>
+            <span className="font-semibold text-bisque-900">{prospectQuickStats.withSupplyChainData}</span>
+            <span>with supply chain data</span>
+          </div>
+        </>
+      )}
+
       {/* Content */}
       {offline ? (
         <div className="bg-white rounded-xl border border-bisque-100 p-8 text-center text-bisque-600 italic">
           Kissinger is offline or unreachable — contacts unavailable.
         </div>
-      ) : activeContacts.length === 0 ? (
+      ) : contacts.length === 0 ? (
         <div className="bg-white rounded-xl border border-bisque-100 p-8 text-center text-bisque-600 italic">
           {isSearch ? `No results for "${q}".` : "No contacts found."}
         </div>
@@ -275,46 +501,85 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
         <>
           {/* Mobile: card list (hidden on md+) */}
           <div className="md:hidden space-y-2">
-            <MobileContactList
-              contacts={activeContacts}
-              details={
-                segment === "people" || segment === "all"
-                  ? peopleDetails
-                  : segment === "prospects"
-                  ? prospectDetails
-                  : undefined
-              }
-              scores={allScores}
-            />
+            <MobileContactList contacts={contacts} />
           </div>
 
           {/* Desktop: tables (hidden on mobile) */}
           <div className="hidden md:block">
             {segment === "vc" ? (
-              <VCTable contacts={activeContacts} />
+              <VCTable contacts={contacts} />
             ) : segment === "prospects" ? (
-              <ProspectsTable contacts={activeContacts} details={prospectDetails} scores={allScores} />
+              <ProspectsTable contacts={contacts} />
             ) : (
               <ContactsTable
-                contacts={activeContacts}
+                contacts={contacts}
                 showKind={segment === "all"}
-                details={segment === "people" || segment === "all" ? peopleDetails : undefined}
-                scores={allScores}
               />
             )}
           </div>
         </>
       )}
 
-      {/* Pagination */}
-      {!offline && !isSearch && totalPages > 1 && (
-        <Pagination
-          currentPage={clampedPage}
-          totalPages={totalPages}
-          segment={segment}
-          q={q}
-          sortBy={sortBy}
-        />
+      {/* Cursor-based pagination */}
+      {!offline && !isSearch && (hasNextPage || hasPreviousPage) && (
+        <CursorPagination prevHref={prevHref} nextHref={nextHref} />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// URL builder for cursor-based pagination
+// ---------------------------------------------------------------------------
+
+function buildCursorUrl(
+  segment: ContactSegment,
+  q: string,
+  after?: string,
+  sortBy?: string,
+  vertical?: string,
+  stage?: string
+): string {
+  const p = new URLSearchParams({ segment });
+  if (q) p.set("q", q);
+  if (after) p.set("after", after);
+  if (sortBy === "score") p.set("sortBy", "score");
+  if (vertical) p.set("vertical", vertical);
+  if (stage) p.set("stage", stage);
+  return `/contacts?${p.toString()}`;
+}
+
+// ---------------------------------------------------------------------------
+// CursorPagination
+// ---------------------------------------------------------------------------
+
+function CursorPagination({
+  prevHref,
+  nextHref,
+}: {
+  prevHref: string | null;
+  nextHref: string | null;
+}) {
+  const btnBase = "px-4 py-2 rounded-lg text-sm font-medium transition-colors";
+  const btnActive = "bg-bisque-100 text-bisque-800 hover:bg-bisque-200";
+  const btnDisabled =
+    "bg-bisque-50 text-bisque-300 cursor-not-allowed pointer-events-none";
+
+  return (
+    <div className="flex items-center justify-center gap-3 py-2">
+      {prevHref ? (
+        <Link href={prevHref} className={`${btnBase} ${btnActive}`}>
+          ← First page
+        </Link>
+      ) : (
+        <span className={`${btnBase} ${btnDisabled}`}>← First page</span>
+      )}
+      {nextHref ? (
+        <Link href={nextHref} className={`${btnBase} ${btnActive}`}>
+          Load more →
+        </Link>
+      ) : (
+        <span className={`${btnBase} ${btnDisabled}`}>Load more →</span>
       )}
     </div>
   );
@@ -324,25 +589,14 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
 // MobileContactList — card-based list for mobile viewports
 // ---------------------------------------------------------------------------
 
-function MobileContactList({
-  contacts,
-  details,
-  scores,
-}: {
-  contacts: EntitySummary[];
-  details?: Map<string, ContactDetail>;
-  scores?: Map<string, ScoreResult>;
-}) {
+function MobileContactList({ contacts }: { contacts: EntitySummary[] }) {
   return (
     <>
       {contacts.map((contact) => {
-        // For people: use title + company. For prospect orgs: use industry + location.
-        const company = getMeta(details, contact.id, "company");
-        const title = getMeta(details, contact.id, "title");
-        const industry = getMeta(details, contact.id, "industry");
-        const location = getMeta(details, contact.id, "location");
-        const scoreResult = scores?.get(contact.id);
-        // Prospect orgs don't have title/company; show industry + location instead
+        const company = getMeta(contact, "company");
+        const title = getMeta(contact, "title");
+        const industry = getMeta(contact, "industry");
+        const location = getMeta(contact, "location");
         const displayTitle = title ?? (contact.kind === "org" ? industry : undefined);
         const displayOrg = company ?? (contact.kind === "org" ? location : undefined);
         return (
@@ -354,113 +608,11 @@ function MobileContactList({
             org={displayOrg}
             kind={contact.kind}
             tags={contact.tags}
-            score={scoreResult?.score}
+            score={undefined}
           />
         );
       })}
     </>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Pagination component
-// ---------------------------------------------------------------------------
-
-function buildPageUrl(page: number, segment: ContactSegment, q: string, sortBy?: string): string {
-  const params = new URLSearchParams({ segment });
-  if (q) params.set("q", q);
-  if (sortBy === "score") params.set("sortBy", "score");
-  if (page > 1) params.set("page", String(page));
-  return `/contacts?${params.toString()}`;
-}
-
-function Pagination({
-  currentPage,
-  totalPages,
-  segment,
-  q,
-  sortBy,
-}: {
-  currentPage: number;
-  totalPages: number;
-  segment: ContactSegment;
-  q: string;
-  sortBy?: string;
-}) {
-  const hasPrev = currentPage > 1;
-  const hasNext = currentPage < totalPages;
-
-  // Show at most 5 page numbers centered around current page
-  const maxVisible = 5;
-  let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
-  const endPage = Math.min(totalPages, startPage + maxVisible - 1);
-  if (endPage - startPage + 1 < maxVisible) {
-    startPage = Math.max(1, endPage - maxVisible + 1);
-  }
-  const pageNumbers = Array.from(
-    { length: endPage - startPage + 1 },
-    (_, i) => startPage + i
-  );
-
-  const btnBase =
-    "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors";
-  const btnActive = "bg-bisque-700 text-bisque-50";
-  const btnInactive = "bg-bisque-100 text-bisque-800 hover:bg-bisque-200";
-  const btnDisabled = "bg-bisque-50 text-bisque-300 cursor-not-allowed pointer-events-none";
-
-  return (
-    <div className="flex items-center justify-center gap-1.5 py-2">
-      <Link
-        href={buildPageUrl(currentPage - 1, segment, q, sortBy)}
-        aria-disabled={!hasPrev}
-        className={`${btnBase} ${hasPrev ? btnInactive : btnDisabled}`}
-      >
-        ← Prev
-      </Link>
-
-      {startPage > 1 && (
-        <>
-          <Link href={buildPageUrl(1, segment, q, sortBy)} className={`${btnBase} ${btnInactive}`}>
-            1
-          </Link>
-          {startPage > 2 && (
-            <span className="px-1 text-bisque-400 text-sm">…</span>
-          )}
-        </>
-      )}
-
-      {pageNumbers.map((n) => (
-        <Link
-          key={n}
-          href={buildPageUrl(n, segment, q, sortBy)}
-          className={`${btnBase} ${n === currentPage ? btnActive : btnInactive}`}
-        >
-          {n}
-        </Link>
-      ))}
-
-      {endPage < totalPages && (
-        <>
-          {endPage < totalPages - 1 && (
-            <span className="px-1 text-bisque-400 text-sm">…</span>
-          )}
-          <Link
-            href={buildPageUrl(totalPages, segment, q, sortBy)}
-            className={`${btnBase} ${btnInactive}`}
-          >
-            {totalPages}
-          </Link>
-        </>
-      )}
-
-      <Link
-        href={buildPageUrl(currentPage + 1, segment, q)}
-        aria-disabled={!hasNext}
-        className={`${btnBase} ${hasNext ? btnInactive : btnDisabled}`}
-      >
-        Next →
-      </Link>
-    </div>
   );
 }
 
@@ -471,13 +623,9 @@ function Pagination({
 function ContactsTable({
   contacts,
   showKind,
-  details,
-  scores,
 }: {
   contacts: EntitySummary[];
   showKind?: boolean;
-  details?: Map<string, ContactDetail>;
-  scores?: Map<string, ScoreResult>;
 }) {
   return (
     <div className="bg-white rounded-xl border border-bisque-100 overflow-hidden shadow-sm">
@@ -511,10 +659,8 @@ function ContactsTable({
         </thead>
         <tbody>
           {contacts.map((contact, i) => {
-            const company = getMeta(details, contact.id, "company");
-            const title = getMeta(details, contact.id, "title");
-            const scoreResult = scores?.get(contact.id);
-            // Filter out internal/noisy tags from the tags column
+            const company = getMeta(contact, "company");
+            const title = getMeta(contact, "title");
             const displayTags = contact.tags.filter(
               (t) => !["eloso", "prospect-contact"].includes(t)
             );
@@ -532,7 +678,6 @@ function ContactsTable({
                   >
                     {contact.name}
                   </Link>
-                  {/* Mobile: show org + title inline below name */}
                   {(company || title) && (
                     <div className="sm:hidden text-xs text-bisque-500 mt-0.5">
                       {[title, company].filter(Boolean).join(" · ")}
@@ -557,11 +702,13 @@ function ContactsTable({
                   {contact.updatedAt ? formatDate(contact.updatedAt) : "—"}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  {scoreResult !== undefined && (
-                    <Link href={`/contacts/${encodeURIComponent(contact.id)}`}>
-                      <ScoreBadge score={scoreResult.score} />
-                    </Link>
-                  )}
+                  {/* Score is lazy-loaded client-side (see P1b) */}
+                  <span
+                    className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums bg-bisque-50 text-bisque-400 border border-bisque-100"
+                    title="Score loads on demand"
+                  >
+                    —
+                  </span>
                 </td>
               </tr>
             );
@@ -576,8 +723,14 @@ function ContactsTable({
 // VC Firms table — investor CRM view
 // ---------------------------------------------------------------------------
 
+const VC_STAGE_TAGS = new Set([
+  "seed", "pre-seed", "series-a", "series-b", "series-c", "growth",
+  "late-stage", "venture", "corporate-vc", "family-office", "accelerator",
+  "company-builder",
+]);
+const VC_PRIORITY_TAGS = new Set(["priority", "tier-1", "tier-2"]);
+
 function VCTable({ contacts }: { contacts: EntitySummary[] }) {
-  // Sort: priority first, then alphabetical
   const sorted = [...contacts].sort((a, b) => {
     const aPriority = a.tags.some((t) => ["priority", "tier-1"].includes(t)) ? 0 : 1;
     const bPriority = b.tags.some((t) => ["priority", "tier-1"].includes(t)) ? 0 : 1;
@@ -590,18 +743,10 @@ function VCTable({ contacts }: { contacts: EntitySummary[] }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-bisque-50 border-b border-bisque-100">
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800">
-              Firm
-            </th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden sm:table-cell">
-              Stage / Type
-            </th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden md:table-cell">
-              Focus
-            </th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">
-              Priority
-            </th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800">Firm</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden sm:table-cell">Stage / Type</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden md:table-cell">Focus</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">Priority</th>
           </tr>
         </thead>
         <tbody>
@@ -657,16 +802,7 @@ const FIT_COLORS: Record<string, string> = {
   "fit-low": "bg-bisque-100 text-bisque-600",
 };
 
-function ProspectsTable({
-  contacts,
-  details,
-  scores,
-}: {
-  contacts: EntitySummary[];
-  details?: Map<string, ContactDetail>;
-  scores?: Map<string, ScoreResult>;
-}) {
-  // Sort: fit-high first
+function ProspectsTable({ contacts }: { contacts: EntitySummary[] }) {
   const fitOrder = ["fit-high", "fit-medium", "fit-low"];
   const sorted = [...contacts].sort((a, b) => {
     const aFit = fitOrder.findIndex((f) => a.tags.includes(f));
@@ -682,42 +818,25 @@ function ProspectsTable({
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-bisque-50 border-b border-bisque-100">
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800">
-              Company
-            </th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden sm:table-cell">
-              Fit
-            </th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden md:table-cell">
-              Industry
-            </th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">
-              Key Challenge
-            </th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">
-              Economic Buyer
-            </th>
-            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden 2xl:table-cell">
-              HQ
-            </th>
-            <th className="text-right px-4 py-3 font-semibold text-bisque-800">
-              Score
-            </th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800">Company</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden sm:table-cell">Fit</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden md:table-cell">Industry</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">Key Challenge</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">Economic Buyer</th>
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden 2xl:table-cell">HQ</th>
+            <th className="text-right px-4 py-3 font-semibold text-bisque-800">Score</th>
           </tr>
         </thead>
         <tbody>
           {sorted.map((company, i) => {
             const fitTag = company.tags.find((t) => t.startsWith("fit-"));
-            const detail = details?.get(company.id);
-            const industry = detail?.meta.find((m) => m.key === "industry")?.value;
-            const location = detail?.meta.find((m) => m.key === "location")?.value;
-            const revenue = detail?.meta.find((m) => m.key === "revenue")?.value;
-            const employees = detail?.meta.find((m) => m.key === "employees")?.value;
-            const buyerPersona = detail?.meta.find((m) => m.key === "buyer_persona")?.value;
-            // Extract challenge from structured notes field
-            const challengeMatch = detail?.notes?.match(/Challenge:\s*(.+?)(?:\n|$)/);
+            const industry = getMeta(company, "industry");
+            const location = getMeta(company, "location");
+            const revenue = getMeta(company, "revenue");
+            const employees = getMeta(company, "employees");
+            const buyerPersona = getMeta(company, "buyer_persona");
+            const challengeMatch = company.notes?.match(/Challenge:\s*(.+?)(?:\n|$)/);
             const challenge = challengeMatch?.[1]?.trim();
-            const scoreResult = scores?.get(company.id);
             return (
               <tr
                 key={company.id}
@@ -764,11 +883,13 @@ function ProspectsTable({
                   {location ?? "—"}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  {scoreResult !== undefined && (
-                    <Link href={`/contacts/${encodeURIComponent(company.id)}`}>
-                      <ScoreBadge score={scoreResult.score} />
-                    </Link>
-                  )}
+                  {/* Score is lazy-loaded (P1b) */}
+                  <span
+                    className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums bg-bisque-50 text-bisque-400 border border-bisque-100"
+                    title="Score loads on demand"
+                  >
+                    —
+                  </span>
                 </td>
               </tr>
             );
@@ -782,29 +903,6 @@ function ProspectsTable({
 // ---------------------------------------------------------------------------
 // Shared sub-components
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// ScoreBadge — colored score pill (green 70+, yellow 40-69, red <40)
-// ---------------------------------------------------------------------------
-
-function ScoreBadge({ score }: { score: number }) {
-  let cls: string;
-  if (score >= 70) {
-    cls = "bg-green-100 text-green-700 border border-green-200";
-  } else if (score >= 40) {
-    cls = "bg-yellow-100 text-yellow-700 border border-yellow-200";
-  } else {
-    cls = "bg-red-100 text-red-600 border border-red-200";
-  }
-  return (
-    <span
-      className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums ${cls}`}
-      title={`Eloso fit score: ${score}/100`}
-    >
-      {score}
-    </span>
-  );
-}
 
 function KindBadge({ kind, tags }: { kind: string; tags: string[] }) {
   let label = kind;
@@ -871,3 +969,6 @@ function formatDate(iso: string): string {
     return iso;
   }
 }
+
+// Keep for search path compatibility (not used in paginated path)
+void getMetaFromMap;
