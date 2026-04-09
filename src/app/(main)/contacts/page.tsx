@@ -4,6 +4,7 @@ import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/
 import AddNewButton from "@/components/AddNewButton";
 import { scoreContact } from "@/lib/score-contact";
 import type { ScoreResult } from "@/lib/score-contact";
+import ContactCard from "@/components/ContactCard";
 
 // Utility: extract a meta value by key from a ContactDetail map
 function getMeta(
@@ -270,17 +271,39 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
         <div className="bg-white rounded-xl border border-bisque-100 p-8 text-center text-bisque-600 italic">
           {isSearch ? `No results for "${q}".` : "No contacts found."}
         </div>
-      ) : segment === "vc" ? (
-        <VCTable contacts={activeContacts} />
-      ) : segment === "prospects" ? (
-        <ProspectsTable contacts={activeContacts} details={prospectDetails} scores={allScores} />
       ) : (
-        <ContactsTable
-          contacts={activeContacts}
-          showKind={segment === "all"}
-          details={segment === "people" || segment === "all" ? peopleDetails : undefined}
-          scores={allScores}
-        />
+        <>
+          {/* Mobile: card list (hidden on md+) */}
+          <div className="md:hidden space-y-2">
+            <MobileContactList
+              contacts={activeContacts}
+              details={
+                segment === "people" || segment === "all"
+                  ? peopleDetails
+                  : segment === "prospects"
+                  ? prospectDetails
+                  : undefined
+              }
+              scores={allScores}
+            />
+          </div>
+
+          {/* Desktop: tables (hidden on mobile) */}
+          <div className="hidden md:block">
+            {segment === "vc" ? (
+              <VCTable contacts={activeContacts} />
+            ) : segment === "prospects" ? (
+              <ProspectsTable contacts={activeContacts} details={prospectDetails} scores={allScores} />
+            ) : (
+              <ContactsTable
+                contacts={activeContacts}
+                showKind={segment === "all"}
+                details={segment === "people" || segment === "all" ? peopleDetails : undefined}
+                scores={allScores}
+              />
+            )}
+          </div>
+        </>
       )}
 
       {/* Pagination */}
@@ -294,6 +317,42 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
         />
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MobileContactList — card-based list for mobile viewports
+// ---------------------------------------------------------------------------
+
+function MobileContactList({
+  contacts,
+  details,
+  scores,
+}: {
+  contacts: EntitySummary[];
+  details?: Map<string, ContactDetail>;
+  scores?: Map<string, ScoreResult>;
+}) {
+  return (
+    <>
+      {contacts.map((contact) => {
+        const company = getMeta(details, contact.id, "company");
+        const title = getMeta(details, contact.id, "title");
+        const scoreResult = scores?.get(contact.id);
+        return (
+          <ContactCard
+            key={contact.id}
+            id={contact.id}
+            name={contact.name}
+            title={title}
+            org={company}
+            kind={contact.kind}
+            tags={contact.tags}
+            score={scoreResult?.score}
+          />
+        );
+      })}
+    </>
   );
 }
 
