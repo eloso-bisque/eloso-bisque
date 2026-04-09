@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { fetchContactDetail, classifyOrg } from "@/lib/kissinger";
 import type { ResolvedEdge, ContactDetail, PersonAtOrg } from "@/lib/kissinger";
 import NotesEditor from "@/components/NotesEditor";
+import EnrichButton from "@/components/EnrichButton";
 import { scoreContact } from "@/lib/score-contact";
 import type { ScoreResult, ScoringEdge } from "@/lib/score-contact";
 
@@ -218,9 +219,12 @@ export default async function ContactDetailPage({
               )}
             </div>
           </div>
-          <div className="text-right text-xs text-bisque-400 shrink-0">
-            <p>Updated {formatDate(contact.updatedAt)}</p>
-            <p className="mt-0.5">Added {formatDate(contact.createdAt)}</p>
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <div className="text-right text-xs text-bisque-400">
+              <p>Updated {formatDate(contact.updatedAt)}</p>
+              <p className="mt-0.5">Added {formatDate(contact.createdAt)}</p>
+            </div>
+            <EnrichButton contactId={contact.id} />
           </div>
         </div>
 
