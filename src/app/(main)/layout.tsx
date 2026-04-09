@@ -17,6 +17,9 @@ export default function MainLayout({
           <a href="/contacts" className="hover:text-bisque-200 transition-colors">
             Contacts
           </a>
+          <a href="/investors" className="hover:text-bisque-200 transition-colors">
+            Investors
+          </a>
           <a href="/funnel" className="hover:text-bisque-200 transition-colors">
             Funnel
           </a>

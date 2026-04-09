@@ -303,3 +303,188 @@ export function scoreContact(contact: ScoringContact): ScoreResult {
 function getMeta(contact: ScoringContact, key: string): string | undefined {
   return (contact.meta ?? []).find((m) => m.key === key)?.value;
 }
+
+// ---------------------------------------------------------------------------
+// Investor fit scoring (BIS-331)
+//
+// Five investor-specific factors, summing to 1.0:
+//   stageFit          (30%) — stage focus matches Eloso's current round (Seed/Series A)
+//   thesisAlignment   (25%) — thesis matches supply chain / AI / enterprise
+//   checkSizeFit      (20%) — check size in range for Eloso ($500K–$5M)
+//   warmIntroPath     (15%) — we have a path in via network
+//   portfolioOverlap  (10%) — portfolio validates the thesis
+// ---------------------------------------------------------------------------
+
+const INVESTOR_WEIGHTS = {
+  stageFit: 0.30,
+  thesisAlignment: 0.25,
+  checkSizeFit: 0.20,
+  warmIntroPath: 0.15,
+  portfolioOverlap: 0.10,
+} as const;
+
+/** Tags that signal stage alignment with Eloso's Seed/Series-A target round */
+const ELOSO_STAGE_TAGS = new Set(["seed", "pre-seed", "series-a", "series-b"]);
+
+/** Tags that signal thesis alignment with Eloso's domain */
+const THESIS_TAGS = new Set([
+  "supply-chain", "logistics", "manufacturing", "industrial",
+  "enterprise", "ai", "b2b", "saas", "deep-tech", "freight",
+]);
+
+/** Tags that signal portfolio overlap */
+const PORTFOLIO_TAGS = new Set([
+  "supply-chain", "logistics", "manufacturing", "industrial", "enterprise",
+]);
+
+function scoreInvestorStageFit(contact: ScoringContact): number {
+  const tags = new Set((contact.tags ?? []).map((t) => t.toLowerCase()));
+  const stageStr = getMeta(contact, "stage")?.toLowerCase() ?? "";
+
+  // Direct tag match
+  if ([...tags].some((t) => ELOSO_STAGE_TAGS.has(t))) return 1.0;
+
+  // Meta stage field
+  if (stageStr.includes("seed") || stageStr.includes("series a") || stageStr.includes("series-a")) return 1.0;
+  if (stageStr.includes("series b") || stageStr.includes("series-b")) return 0.6;
+  if (stageStr.includes("growth") || stageStr.includes("late")) return 0.2;
+
+  // Generic venture fund — moderate fit
+  if (tags.has("venture") || tags.has("vc")) return 0.5;
+
+  return 0.1;
+}
+
+function scoreInvestorThesisAlignment(contact: ScoringContact): number {
+  const tags = new Set((contact.tags ?? []).map((t) => t.toLowerCase()));
+  const thesis = (getMeta(contact, "thesis") ?? "").toLowerCase();
+  const sectorFit = (getMeta(contact, "sector_fit") ?? "").toLowerCase();
+  const notes = (contact.notes ?? "").toLowerCase();
+  const combined = `${thesis} ${sectorFit} ${notes}`;
+
+  const tagMatches = [...tags].filter((t) => THESIS_TAGS.has(t)).length;
+  if (tagMatches >= 3) return 1.0;
+  if (tagMatches >= 2) return 0.8;
+  if (tagMatches >= 1) return 0.6;
+
+  // Text-based matches
+  const textMatches = [
+    "supply chain", "logistics", "manufacturing", "enterprise", "b2b",
+    "ai", "artificial intelligence", "saas", "deep tech",
+  ].filter((term) => combined.includes(term)).length;
+
+  if (textMatches >= 3) return 0.9;
+  if (textMatches >= 2) return 0.7;
+  if (textMatches >= 1) return 0.5;
+
+  // Generalist fund — modest alignment
+  const sectorFitVal = getMeta(contact, "sector_fit") ?? "";
+  if (sectorFitVal.includes("generalist")) return 0.4;
+
+  return 0.1;
+}
+
+function scoreInvestorCheckSizeFit(contact: ScoringContact): number {
+  const checkSize = getMeta(contact, "check_size") ?? "";
+  if (!checkSize) return 0.4; // unknown — assume possible
+
+  // Parse out the upper bound of the check size range
+  // Format examples: "$500K–$3M", "$25K–$500K", "$1M–$5M", "$5M–$15M"
+  const millions = checkSize.match(/\$?([\d.]+)M/g);
+  const thousands = checkSize.match(/\$?([\d.]+)K/g);
+
+  const maxM = millions
+    ? Math.max(...millions.map((m) => parseFloat(m.replace(/[$M]/g, ""))))
+    : 0;
+  const minK = thousands
+    ? Math.min(...thousands.map((k) => parseFloat(k.replace(/[$K]/g, ""))))
+    : 0;
+  const minM = minK > 0 ? minK / 1000 : (millions ? Math.min(...millions.map((m) => parseFloat(m.replace(/[$M]/g, "")))) : 0);
+
+  // Eloso target: $500K–$5M range
+  const ELOSO_MIN = 0.5; // $500K
+  const ELOSO_MAX = 5.0; // $5M
+
+  // If check size overlaps with Eloso's range — good fit
+  if (maxM >= ELOSO_MIN && minM <= ELOSO_MAX) return 1.0;
+  // Upper range is above Eloso's stage (too big)
+  if (minM > ELOSO_MAX) return 0.2;
+  // Very small checks only (accelerator-style)
+  if (maxM > 0 && maxM < ELOSO_MIN) return 0.3;
+
+  return 0.4;
+}
+
+function scoreInvestorWarmIntroPath(contact: ScoringContact): number {
+  const warmPath = getMeta(contact, "warm_intro_path") ?? "";
+  if (warmPath && warmPath !== "") return 1.0;
+
+  // Edges-based: any strong connection signals a possible warm path
+  const edges = contact.edges ?? [];
+  const strongEdges = edges.filter((e) =>
+    ["knows", "advises", "partnered_with"].includes(e.relation ?? "")
+  );
+  if (strongEdges.length >= 2) return 0.7;
+  if (strongEdges.length >= 1) return 0.5;
+
+  // Priority tag = someone has identified this as reachable
+  const priority = (getMeta(contact, "priority") ?? "").toLowerCase();
+  if (priority === "high") return 0.6;
+  if (priority === "medium") return 0.4;
+
+  return 0.1;
+}
+
+function scoreInvestorPortfolioOverlap(contact: ScoringContact): number {
+  const tags = new Set((contact.tags ?? []).map((t) => t.toLowerCase()));
+  const matches = [...tags].filter((t) => PORTFOLIO_TAGS.has(t)).length;
+
+  if (matches >= 2) return 1.0;
+  if (matches >= 1) return 0.6;
+  return 0.2;
+}
+
+export interface InvestorScoringContact extends ScoringContact {
+  /** Whether this contact is an investor (firm or person) */
+  isInvestor?: boolean;
+}
+
+/**
+ * Score an investor firm or person using investor-specific weights.
+ * Use scoreContact() for regular contacts.
+ */
+export function scoreInvestor(contact: InvestorScoringContact): ScoreResult {
+  const factors = {
+    stageFit: scoreInvestorStageFit(contact),
+    thesisAlignment: scoreInvestorThesisAlignment(contact),
+    checkSizeFit: scoreInvestorCheckSizeFit(contact),
+    warmIntroPath: scoreInvestorWarmIntroPath(contact),
+    portfolioOverlap: scoreInvestorPortfolioOverlap(contact),
+  };
+
+  const FACTOR_LABELS: Record<string, string> = {
+    stageFit: "Stage Fit",
+    thesisAlignment: "Thesis Alignment",
+    checkSizeFit: "Check Size Fit",
+    warmIntroPath: "Warm Intro Path",
+    portfolioOverlap: "Portfolio Overlap",
+  };
+
+  let weightedSum = 0;
+  const breakdown: Record<string, FactorResult> = {};
+
+  for (const [key, raw] of Object.entries(factors)) {
+    const weight = INVESTOR_WEIGHTS[key as keyof typeof INVESTOR_WEIGHTS];
+    const weighted = raw * weight;
+    weightedSum += weighted;
+    breakdown[key] = {
+      raw: Math.round(raw * 1000) / 1000,
+      weight,
+      weighted: Math.round(weighted * 10000) / 10000,
+      label: FACTOR_LABELS[key] ?? key,
+    };
+  }
+
+  const score = Math.max(0, Math.min(100, Math.round(weightedSum * 100)));
+  return { score, breakdown };
+}

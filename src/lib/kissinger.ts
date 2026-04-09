@@ -412,10 +412,14 @@ async function fetchEntityDetails(ids: string[]): Promise<Map<string, ContactDet
 
 export async function fetchSegmentedContacts(): Promise<SegmentedContacts | null> {
   try {
-    const [people, allOrgs] = await Promise.all([
+    const [allPeople, allOrgs] = await Promise.all([
       fetchAllEntities("person"),
       fetchAllEntities("org"),
     ]);
+
+    // BIS-327: Exclude investor kinds from Contacts queries.
+    // Investor people (tagged vc/investor) belong on the /investors page, not /contacts.
+    const people = allPeople.filter((p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t)));
 
     const vc: EntitySummary[] = [];
     const prospects: EntitySummary[] = [];
@@ -423,6 +427,7 @@ export async function fetchSegmentedContacts(): Promise<SegmentedContacts | null
 
     for (const org of allOrgs) {
       const seg = classifyOrg(org.tags);
+      // VC orgs are now exclusively on /investors — exclude from contacts
       if (seg === "vc") vc.push(org);
       else if (seg === "prospects") prospects.push(org);
       else otherOrgs.push(org);
@@ -845,5 +850,184 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
     return results;
   } catch {
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Investor-specific types and queries (BIS-325–333)
+//
+// ARCHITECTURE NOTE: Kissinger's EntityKind is a closed Rust enum.
+// investor_firm and investor_person do NOT exist as native kinds.
+// We use kind=org + tag=vc for investor firms, kind=person + tag=vc for
+// investor people. This is consistent with classifyOrg() and requires no
+// Kissinger recompile. The UI layer applies investor-specific rendering
+// based on tags.
+// ---------------------------------------------------------------------------
+
+/** Tags that identify a VC / investor firm */
+export const INVESTOR_FIRM_TAGS = new Set(["vc", "investor"]);
+
+/** Tags that identify a VC / investor person */
+export const INVESTOR_PERSON_TAGS = new Set(["vc", "investor"]);
+
+/** Stage focus tags used to determine stage fit */
+export const STAGE_TAGS = new Set([
+  "pre-seed", "seed", "series-a", "series-b", "series-c",
+  "growth", "late-stage", "venture", "corporate-vc", "family-office",
+  "accelerator", "company-builder",
+]);
+
+/** Thesis tags for supply chain / AI alignment */
+export const THESIS_MATCH_TAGS = new Set([
+  "supply-chain", "logistics", "manufacturing", "industrial",
+  "enterprise", "ai", "b2b", "saas", "deep-tech", "freight",
+]);
+
+export function isInvestorFirm(entity: EntitySummary): boolean {
+  return entity.kind === "org" && entity.tags.some((t) => INVESTOR_FIRM_TAGS.has(t));
+}
+
+export function isInvestorPerson(entity: EntitySummary): boolean {
+  return entity.kind === "person" && entity.tags.some((t) => INVESTOR_PERSON_TAGS.has(t));
+}
+
+export interface InvestorFirm extends EntitySummary {
+  stage: string;
+  checkSize: string;
+  location: string;
+  thesis: string;
+  priority: string;
+  pipelineStage: string;
+  website: string;
+  sectorFit: string;
+  fitScore?: number;
+}
+
+export interface InvestorPerson extends EntitySummary {
+  title: string;
+  firmName: string;
+  firmId?: string;
+  incentive: string;
+  linkedinUrl: string;
+  priority: string;
+  fitScore?: number;
+}
+
+export interface InvestorData {
+  firms: InvestorFirm[];
+  people: InvestorPerson[];
+  firmDetails: Map<string, ContactDetail>;
+  peopleDetails: Map<string, ContactDetail>;
+}
+
+function metaVal(detail: ContactDetail, key: string): string {
+  return detail.meta.find((m) => m.key === key)?.value ?? "";
+}
+
+/**
+ * Fetch all investor firms (kind=org, tag=vc) and investor people (kind=person, tag=vc).
+ * Excludes investors from the regular contacts/prospects queries.
+ */
+export async function fetchInvestorData(): Promise<InvestorData | null> {
+  try {
+    const [allOrgs, allPeople] = await Promise.all([
+      fetchAllEntities("org"),
+      fetchAllEntities("person"),
+    ]);
+
+    const firmSummaries = allOrgs.filter(isInvestorFirm);
+    const personSummaries = allPeople.filter(isInvestorPerson);
+
+    // Fetch full details for enriched meta
+    const [firmDetails, peopleDetails] = await Promise.all([
+      fetchEntityDetails(firmSummaries.map((f) => f.id)),
+      fetchEntityDetails(personSummaries.map((p) => p.id)),
+    ]);
+
+    const firms: InvestorFirm[] = firmSummaries.map((f) => {
+      const detail = firmDetails.get(f.id);
+      return {
+        ...f,
+        stage: detail ? metaVal(detail, "stage") : "",
+        checkSize: detail ? metaVal(detail, "check_size") : "",
+        location: detail ? metaVal(detail, "location") : "",
+        thesis: detail ? metaVal(detail, "thesis") : "",
+        priority: detail ? metaVal(detail, "priority") : "",
+        pipelineStage: detail ? metaVal(detail, "pipeline_stage") : "Research",
+        website: detail ? metaVal(detail, "website") : "",
+        sectorFit: detail ? metaVal(detail, "sector_fit") : "",
+      };
+    });
+
+    const people: InvestorPerson[] = personSummaries.map((p) => {
+      const detail = peopleDetails.get(p.id);
+      return {
+        ...p,
+        title: detail ? metaVal(detail, "title") : "",
+        firmName: detail ? metaVal(detail, "org") : "",
+        incentive: detail ? metaVal(detail, "incentive") : "",
+        linkedinUrl: detail ? (metaVal(detail, "linkedin_url") || metaVal(detail, "linkedin")) : "",
+        priority: detail ? metaVal(detail, "priority") : "",
+      };
+    });
+
+    return { firms, people, firmDetails, peopleDetails };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch a single investor firm with full details, people, and edges.
+ * Reuses fetchContactDetail which already handles reverse edges (peopleAtOrg).
+ */
+export async function fetchInvestorFirmDetail(id: string) {
+  return fetchContactDetail(id);
+}
+
+/**
+ * Fetch a single investor person with full details and firm link.
+ */
+export async function fetchInvestorPersonDetail(id: string) {
+  return fetchContactDetail(id);
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline stage mutation
+// ---------------------------------------------------------------------------
+
+const UPDATE_PIPELINE_STAGE_MUTATION = `
+  mutation UpdatePipelineStage($id: String!, $input: UpdateEntityInput!) {
+    updateEntity(id: $id, input: $input) {
+      id name meta { key value }
+    }
+  }
+`;
+
+/**
+ * Update an investor firm's pipeline stage.
+ * pipeline_stage is stored as a meta field on the entity.
+ */
+export async function updatePipelineStage(
+  firmId: string,
+  stage: string
+): Promise<boolean> {
+  try {
+    // We need to fetch current meta to merge (updateEntity replaces meta entirely)
+    const detail = await gql<{ entity: ContactDetail }>(
+      `query E($id: String!) { entity(id: $id) { meta { key value } } }`,
+      { id: firmId }
+    );
+    const existingMeta = detail.entity.meta ?? [];
+    const withoutStage = existingMeta.filter((m) => m.key !== "pipeline_stage");
+    const newMeta = [...withoutStage, { key: "pipeline_stage", value: stage }];
+
+    await gql(UPDATE_PIPELINE_STAGE_MUTATION, {
+      id: firmId,
+      input: { meta: newMeta },
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
