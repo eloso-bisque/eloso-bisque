@@ -217,13 +217,20 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
           hasPreviousPage = !!afterCursor;
         }
       } else {
-        const page = await fetchContactsPage(kind, PAGE_SIZE, afterCursor);
+        // P3 note: Kissinger entities() does not support tag filtering server-side
+        // (only kind, first, after, before, last args exist — no tags param).
+        // For org sub-segments we fetch a larger batch so client-side tag filtering
+        // produces enough visible results per page. People tab fetches exactly PAGE_SIZE.
+        const fetchSize =
+          segment === "people" ? PAGE_SIZE : PAGE_SIZE * 4; // 200 for org sub-segments
+
+        const page = await fetchContactsPage(kind, fetchSize, afterCursor);
         if (!page) {
           offline = true;
         } else {
           let raw = page.contacts;
 
-          // Apply segment filter for org sub-segments
+          // Apply segment filter for org sub-segments (client-side — API has no tag filter)
           if (segment === "vc") {
             raw = raw.filter((e) => classifyOrg(e.tags) === "vc");
           } else if (segment === "prospects") {
