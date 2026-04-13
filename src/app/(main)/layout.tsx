@@ -26,6 +26,9 @@ export default function MainLayout({
           <a href="/outreach" className="hover:text-bisque-200 transition-colors">
             Outreach
           </a>
+          <a href="/sectors" className="hover:text-bisque-200 transition-colors">
+            Sectors
+          </a>
         </nav>
       </header>
 
