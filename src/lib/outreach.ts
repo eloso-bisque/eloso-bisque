@@ -13,6 +13,9 @@ export type TeamMember = "Ben" | "Jake" | "Drew";
 
 export const TEAM_MEMBERS: TeamMember[] = ["Ben", "Jake", "Drew"];
 
+/** Outreach cadence stage for a prospect contact. */
+export type OutreachStage = "cold" | "touched_1" | "touched_2" | "touched_3" | "responded";
+
 export interface ProspectContact {
   id: string;
   name: string;
@@ -24,6 +27,8 @@ export interface ProspectContact {
   fitTier: "high" | "medium" | "low";
   /** Notes field from Kissinger */
   notes?: string;
+  /** Current outreach cadence stage */
+  outreachStage?: OutreachStage;
 }
 
 export interface OutreachTask {

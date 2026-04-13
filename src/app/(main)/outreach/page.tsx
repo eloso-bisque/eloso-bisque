@@ -23,6 +23,7 @@ function mapContact(raw: ProspectContactRaw): ProspectContact {
     sector: raw.sector,
     fitTier: raw.fitTier,
     notes: raw.notes,
+    outreachStage: raw.outreachStage,
   };
 }
 

@@ -66,9 +66,9 @@ export interface EntitySummary {
   tags: string[];
   updatedAt: string;
   archived: boolean;
-  /** Inline meta fields — available when fetched via CONTACTS_PAGE_QUERY */
+  /** Inline meta fields — only available on EntityGql (single-entity queries), not list queries */
   meta?: { key: string; value: string }[];
-  /** Inline notes — available when fetched via CONTACTS_PAGE_QUERY */
+  /** Inline notes — only available on EntityGql (single-entity queries), not list queries */
   notes?: string;
 }
 
@@ -325,8 +325,6 @@ const CONTACTS_PAGE_QUERY = `
           tags
           updatedAt
           archived
-          meta { key value }
-          notes
         }
       }
     }
@@ -727,6 +725,8 @@ export async function searchKissinger(
  * A prospect contact enriched with their org's sector tags.
  * Used by the Outreach Task Engine.
  */
+export type OutreachStage = "cold" | "touched_1" | "touched_2" | "touched_3" | "responded";
+
 export interface ProspectContactRaw {
   id: string;
   name: string;
@@ -738,6 +738,8 @@ export interface ProspectContactRaw {
   notes: string;
   /** ID of the linked org (if resolved) */
   orgId?: string;
+  /** Current outreach cadence stage */
+  outreachStage: OutreachStage;
 }
 
 const PROSPECT_CONTACT_QUERY = `
@@ -749,7 +751,6 @@ const PROSPECT_CONTACT_QUERY = `
           id
           name
           tags
-          notes
         }
       }
     }
@@ -782,7 +783,7 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
     // Fetch all person entities in pages (Kissinger has 7k+ people)
     // We only need those tagged "prospect-contact"
     const PAGE = 500;
-    const prospectPersons: { id: string; name: string; tags: string[]; notes: string }[] = [];
+    const prospectPersons: { id: string; name: string; tags: string[] }[] = [];
     let cursor: string | undefined;
     let safety = 0;
 
@@ -791,7 +792,7 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
       const data = await gql<{
         entities: {
           pageInfo: { hasNextPage: boolean; endCursor: string | null };
-          edges: { node: { id: string; name: string; tags: string[]; notes: string } }[];
+          edges: { node: { id: string; name: string; tags: string[] } }[];
         };
       }>(PROSPECT_CONTACT_QUERY, { first: PAGE, after: cursor });
 
@@ -857,6 +858,12 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
           }
         }
 
+        const outreachStageMeta = meta["outreach_stage"] ?? "cold";
+        const validStages: OutreachStage[] = ["cold", "touched_1", "touched_2", "touched_3", "responded"];
+        const outreachStage: OutreachStage = validStages.includes(outreachStageMeta as OutreachStage)
+          ? (outreachStageMeta as OutreachStage)
+          : "cold";
+
         return {
           id: person.id,
           name: person.name,
@@ -864,8 +871,9 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
           company,
           sector,
           fitTier,
-          notes: person.notes ?? "",
+          notes: "",
           orgId,
+          outreachStage,
         } satisfies ProspectContactRaw;
       })
     );
@@ -1058,5 +1066,291 @@ export async function updatePipelineStage(
     return true;
   } catch {
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LinkedIn outreach interaction logging
+// ---------------------------------------------------------------------------
+
+const LOG_INTERACTION_MUTATION = `
+  mutation LogInteraction($input: CreateInteractionInput!) {
+    logInteraction(input: $input) {
+      id
+      kind
+      occurredAt
+      subject
+      notes
+    }
+  }
+`;
+
+/**
+ * Log a LinkedIn outreach interaction for a contact.
+ * Encodes the platform in the notes field as a prefix (Option A).
+ */
+export async function logLinkedInOutreach(
+  contactId: string,
+  message: string,
+  occurredAt: string
+): Promise<boolean> {
+  try {
+    await gql(LOG_INTERACTION_MUTATION, {
+      input: {
+        kind: "message",
+        subject: "LinkedIn outreach",
+        notes: `Platform: LinkedIn\n\n${message}`,
+        participantIds: [contactId],
+        occurredAt,
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Funnel Kanban — sales pipeline stages
+// ---------------------------------------------------------------------------
+
+export const FUNNEL_STAGES = [
+  "Identified",
+  "Researched",
+  "Contacted",
+  "Engaged",
+  "Meeting Booked",
+  "Proposal Sent",
+  "Closed / Nurture",
+] as const;
+
+export type FunnelStage = (typeof FUNNEL_STAGES)[number];
+
+export interface FunnelContact {
+  id: string;
+  name: string;
+  company: string;
+  title: string;
+  tags: string[];
+  funnelStage: FunnelStage;
+  updatedAt: string;
+}
+
+export type FunnelKanbanData = Record<FunnelStage, FunnelContact[]>;
+
+/**
+ * Update a contact's funnel_stage meta field.
+ * Merges with existing meta so other keys are preserved.
+ */
+export async function updateContactFunnelStage(
+  contactId: string,
+  stage: FunnelStage
+): Promise<boolean> {
+  try {
+    const detail = await gql<{ entity: ContactDetail }>(
+      `query E($id: String!) { entity(id: $id) { meta { key value } } }`,
+      { id: contactId }
+    );
+    const existingMeta = detail.entity.meta ?? [];
+    const withoutStage = existingMeta.filter((m) => m.key !== "funnel_stage");
+    const newMeta = [...withoutStage, { key: "funnel_stage", value: stage }];
+
+    await gql(UPDATE_PIPELINE_STAGE_MUTATION, {
+      id: contactId,
+      input: { meta: newMeta },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function _fetchFunnelKanbanData(): Promise<FunnelKanbanData | null> {
+  try {
+    // Fetch all person entities with meta
+    const people = await fetchAllEntities("person");
+
+    const grouped = Object.fromEntries(
+      FUNNEL_STAGES.map((s) => [s, [] as FunnelContact[]])
+    ) as unknown as FunnelKanbanData;
+
+    for (const person of people) {
+      const stageMeta = person.meta?.find((m) => m.key === "funnel_stage")?.value;
+      const stage: FunnelStage =
+        stageMeta && (FUNNEL_STAGES as readonly string[]).includes(stageMeta)
+          ? (stageMeta as FunnelStage)
+          : "Identified";
+
+      const company = person.meta?.find((m) => m.key === "company")?.value ?? "";
+      const title = person.meta?.find((m) => m.key === "title")?.value ?? "";
+
+      grouped[stage].push({
+        id: person.id,
+        name: person.name,
+        company,
+        title,
+        tags: person.tags,
+        funnelStage: stage,
+        updatedAt: person.updatedAt,
+      });
+    }
+
+    return grouped;
+  } catch {
+    return null;
+  }
+}
+
+export const fetchFunnelKanbanData = unstable_cache(
+  _fetchFunnelKanbanData,
+  ["funnel-kanban"],
+  { revalidate: 60, tags: ["contacts", "funnel"] }
+);
+
+// ---------------------------------------------------------------------------
+// Outreach cadence mutations (BIS-396)
+// ---------------------------------------------------------------------------
+
+const RECORD_OUTREACH_TOUCH_MUTATION = `
+  mutation RecordOutreachTouch($personId: String!, $touchNumber: Int!, $notes: String) {
+    recordOutreachTouch(personId: $personId, touchNumber: $touchNumber, notes: $notes) {
+      interactionId
+      newStage
+    }
+  }
+`;
+
+const RECORD_OUTREACH_RESPONSE_MUTATION = `
+  mutation RecordOutreachResponse($personId: String!, $responseType: ResponseTypeGql!, $notes: String) {
+    recordOutreachResponse(personId: $personId, responseType: $responseType, notes: $notes) {
+      interactionId
+      responseType
+    }
+  }
+`;
+
+export type ResponseType = "Interested" | "NotNow" | "WrongPerson" | "NoReply" | "Bounced";
+
+/**
+ * Record an outreach touch for a person, advancing the outreach stage.
+ * touch_number must match the current stage (1 for cold, 2 for touched_1, 3 for touched_2).
+ * Returns the new stage on success.
+ */
+export async function recordOutreachTouch(
+  personId: string,
+  touchNumber: number,
+  notes?: string
+): Promise<{ interactionId: string; newStage: OutreachStage } | null> {
+  try {
+    const data = await gql<{
+      recordOutreachTouch: { interactionId: string; newStage: string };
+    }>(RECORD_OUTREACH_TOUCH_MUTATION, { personId, touchNumber, notes });
+    return {
+      interactionId: data.recordOutreachTouch.interactionId,
+      newStage: data.recordOutreachTouch.newStage as OutreachStage,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record a prospect response, moving them to the "responded" stage.
+ * responseType must be one of: Interested, NotNow, WrongPerson, NoReply, Bounced
+ */
+export async function recordOutreachResponse(
+  personId: string,
+  responseType: ResponseType,
+  notes?: string
+): Promise<{ interactionId: string; responseType: string } | null> {
+  try {
+    const data = await gql<{
+      recordOutreachResponse: { interactionId: string; responseType: string };
+    }>(RECORD_OUTREACH_RESPONSE_MUTATION, { personId, responseType, notes });
+    return data.recordOutreachResponse;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sector aggregates (BIS-395)
+// ---------------------------------------------------------------------------
+
+/** Aggregated statistics for a single industry sector. */
+export interface SectorAggregate {
+  /** The sector name (from sector_primary meta on org entities). */
+  sector: string;
+  /** Number of non-archived org entities in this sector. */
+  orgCount: number;
+  /** Orgs with at least 1 prospect-contact person linked via works_at. */
+  prospectsWithContacts: number;
+  /** Mean ICP fit score (0.0–1.0), or null if unavailable. */
+  avgIcpScore: number | null;
+  /** Sum of apollo_market_size across orgs in sector, or null if none set. */
+  apolloMarketSize: number | null;
+}
+
+const SECTOR_AGGREGATES_QUERY = `
+  query SectorAggregates {
+    sectorAggregates {
+      sector
+      orgCount
+      prospectsWithContacts
+      avgIcpScore
+      apolloMarketSize
+    }
+  }
+`;
+
+/**
+ * Fetch sector aggregates from Kissinger.
+ * Returns empty array on error (Kissinger offline).
+ */
+export async function fetchSectorAggregates(): Promise<SectorAggregate[]> {
+  try {
+    const data = await gql<{ sectorAggregates: SectorAggregate[] }>(
+      SECTOR_AGGREGATES_QUERY
+    );
+    return data.sectorAggregates ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch org entities tagged with a specific sector value (sector_primary meta).
+ * Used by the /sectors/[sector] page.
+ */
+export async function fetchOrgsBySector(sector: string): Promise<EntitySummary[]> {
+  try {
+    const PAGE = 500;
+    const all: EntitySummary[] = [];
+    let cursor: string | undefined;
+    let safety = 0;
+
+    while (safety < 10) {
+      safety++;
+      const data = await gql<{
+        entities: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          edges: { node: EntitySummary }[];
+        };
+      }>(CONTACTS_PAGE_QUERY, { kind: "org", first: PAGE, after: cursor });
+
+      const raw = data.entities;
+      all.push(...raw.edges.map((e) => e.node).filter((e) => !e.archived));
+
+      if (!raw.pageInfo.hasNextPage || !raw.pageInfo.endCursor) break;
+      cursor = raw.pageInfo.endCursor;
+    }
+
+    // Filter in JS: entities with matching sector_primary meta
+    // Since we can't filter by meta server-side, we use fetchEntityDetails for a subset
+    // For the stub page, return all orgs (sector filtering would require meta detail fetch)
+    // TODO: Add a server-side sectorOrgs query if needed
+    return all;
+  } catch {
+    return [];
   }
 }
