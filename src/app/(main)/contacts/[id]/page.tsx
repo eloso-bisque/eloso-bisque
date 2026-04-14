@@ -9,6 +9,7 @@ import { scoreContact } from "@/lib/score-contact";
 import type { ScoreResult, ScoringEdge } from "@/lib/score-contact";
 import { scoreProspect } from "@/lib/score-prospect";
 import type { ProspectScoreResult } from "@/lib/score-prospect";
+import ContactDetailTabs from "@/components/ContactDetailTabs";
 
 // ---------------------------------------------------------------------------
 // Server-side score computation using already-fetched contact data
@@ -176,15 +177,9 @@ export default async function ContactDetailPage({
       ? "/contacts?segment=prospects"
       : "/contacts?segment=other-orgs";
 
-  return (
-    <div className="max-w-3xl mx-auto space-y-4 md:space-y-6">
-      {/* Breadcrumb */}
-      <nav className="text-sm text-bisque-500">
-        <Link href={backHref} className="hover:text-bisque-700 hover:underline">
-          ← Contacts
-        </Link>
-      </nav>
-
+  // Build the Overview tab content (server-rendered JSX passed as prop)
+  const overviewContent = (
+    <div className="space-y-4 md:space-y-6">
       {/* Header card */}
       <div className="bg-white rounded-xl border border-bisque-100 shadow-sm p-4 md:p-6">
         {/* On mobile: name/info stacked; on desktop: side-by-side with enrich */}
@@ -382,6 +377,20 @@ export default async function ContactDetailPage({
           No connections recorded.
         </div>
       )}
+    </div>
+  );
+
+  return (
+    <div className="max-w-3xl mx-auto space-y-4 md:space-y-6">
+      {/* Breadcrumb */}
+      <nav className="text-sm text-bisque-500">
+        <Link href={backHref} className="hover:text-bisque-700 hover:underline">
+          ← Contacts
+        </Link>
+      </nav>
+
+      {/* Tab shell — Overview / Events / Intro Path */}
+      <ContactDetailTabs contactId={contact.id} overview={overviewContent} />
     </div>
   );
 }

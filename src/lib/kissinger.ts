@@ -676,6 +676,69 @@ export async function fetchContactDetail(
 }
 
 // ---------------------------------------------------------------------------
+// Contact Events (CRM timeline) — BIS-399 / NET-2
+// ---------------------------------------------------------------------------
+
+export type ContactEventKind = "Note" | "Meeting" | "Email" | "Call" | "Custom";
+
+export interface ContactEvent {
+  id: string;
+  personId: string;
+  kind: ContactEventKind;
+  notes: string;
+  occurredAt: string;
+  createdAt: string;
+}
+
+export const CONTACT_EVENTS_QUERY = `
+  query ContactEvents($personId: ID!) {
+    contactEvents(personId: $personId) {
+      id
+      personId
+      kind
+      notes
+      occurredAt
+      createdAt
+    }
+  }
+`;
+
+export const CREATE_CONTACT_EVENT_MUTATION = `
+  mutation CreateContactEvent($personId: ID!, $kind: ContactEventKind!, $notes: String!, $occurredAt: String!) {
+    createContactEvent(personId: $personId, kind: $kind, notes: $notes, occurredAt: $occurredAt) {
+      id
+      personId
+      kind
+      notes
+      occurredAt
+      createdAt
+    }
+  }
+`;
+
+export const DELETE_CONTACT_EVENT_MUTATION = `
+  mutation DeleteContactEvent($id: ID!) {
+    deleteContactEvent(id: $id)
+  }
+`;
+
+/**
+ * Fetch all CRM events for a contact (person or org).
+ * Returns empty array if Kissinger is unreachable or feature not yet deployed.
+ */
+export async function fetchContactEvents(personId: string): Promise<ContactEvent[]> {
+  try {
+    const data = await gql<{ contactEvents: ContactEvent[] }>(
+      CONTACT_EVENTS_QUERY,
+      { personId }
+    );
+    return data.contactEvents ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
 
