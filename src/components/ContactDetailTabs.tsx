@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import ContactEventsTab from "@/components/ContactEventsTab";
+import IntroPathTab from "@/components/IntroPathTab";
 
 type Tab = "overview" | "events" | "intro-path";
 
@@ -13,12 +14,14 @@ const TABS: { id: Tab; label: string }[] = [
 
 interface ContactDetailTabsProps {
   contactId: string;
+  contactName: string;
   /** The full Overview content (server-rendered, passed as children) */
   overview: React.ReactNode;
 }
 
 export default function ContactDetailTabs({
   contactId,
+  contactName,
   overview,
 }: ContactDetailTabsProps) {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -52,13 +55,7 @@ export default function ContactDetailTabs({
       )}
 
       {activeTab === "intro-path" && (
-        <div className="bg-white rounded-xl border border-bisque-100 shadow-sm p-12 text-center">
-          <div className="text-4xl mb-3">🗺️</div>
-          <p className="text-bisque-600 font-medium">Intro Path</p>
-          <p className="text-bisque-400 text-sm mt-1">
-            Coming soon — warm intro path analysis will appear here (NET-5).
-          </p>
-        </div>
+        <IntroPathTab contactId={contactId} contactName={contactName} />
       )}
     </div>
   );

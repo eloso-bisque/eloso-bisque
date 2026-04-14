@@ -390,7 +390,7 @@ export default async function ContactDetailPage({
       </nav>
 
       {/* Tab shell — Overview / Events / Intro Path */}
-      <ContactDetailTabs contactId={contact.id} overview={overviewContent} />
+      <ContactDetailTabs contactId={contact.id} contactName={contact.name} overview={overviewContent} />
     </div>
   );
 }

@@ -739,6 +739,85 @@ export async function fetchContactEvents(personId: string): Promise<ContactEvent
 }
 
 // ---------------------------------------------------------------------------
+// Intro Path (NET-5 / BIS-402)
+// ---------------------------------------------------------------------------
+
+/**
+ * Team member Kissinger person IDs used as BFS source nodes for intro paths.
+ *
+ * Configure via environment variable TEAM_PERSON_IDS (comma-separated).
+ * Example: TEAM_PERSON_IDS=id1,id2,id3
+ *
+ * Until "knows" edges are imported into the graph, introPath will return
+ * found:false for all queries — this is expected, and the UI shows an empty
+ * state prompting LinkedIn import.
+ */
+export const TEAM_PERSON_IDS: string[] = (
+  process.env.TEAM_PERSON_IDS ?? ""
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+export interface IntroPathStep {
+  personId: string;
+  name: string;
+  title: string | null;
+  organization: string | null;
+  relationToNext: string | null;
+}
+
+export interface IntroPathResult {
+  found: boolean;
+  hops: number;
+  steps: IntroPathStep[];
+}
+
+export const INTRO_PATH_QUERY = `
+  query IntroPath($targetPersonId: String!, $sourcePersonIds: [String!]!, $maxHops: Int) {
+    introPath(targetPersonId: $targetPersonId, sourcePersonIds: $sourcePersonIds, maxHops: $maxHops) {
+      found
+      hops
+      steps {
+        personId
+        name
+        title
+        organization
+        relationToNext
+      }
+    }
+  }
+`;
+
+/**
+ * Fetch the shortest warm intro path from any team member to the target person.
+ *
+ * @param targetPersonId  The Kissinger entity ID of the contact to reach.
+ * @param sourcePersonIds Optional override — defaults to TEAM_PERSON_IDS.
+ * @param maxHops         Maximum BFS depth (0 = unlimited).
+ */
+export async function fetchIntroPath(
+  targetPersonId: string,
+  sourcePersonIds: string[] = TEAM_PERSON_IDS,
+  maxHops = 0
+): Promise<IntroPathResult> {
+  if (sourcePersonIds.length === 0) {
+    // No source IDs configured — skip the network call.
+    return { found: false, hops: 0, steps: [] };
+  }
+  try {
+    const data = await gql<{ introPath: IntroPathResult }>(INTRO_PATH_QUERY, {
+      targetPersonId,
+      sourcePersonIds,
+      maxHops,
+    });
+    return data.introPath;
+  } catch {
+    return { found: false, hops: 0, steps: [] };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
 
