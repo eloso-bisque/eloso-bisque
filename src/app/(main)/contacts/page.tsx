@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   fetchContactsPage,
+  fetchAllEntities,
   fetchKissingerFunnelData,
   searchKissinger,
   classifyOrg,
@@ -216,36 +217,44 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
           endCursor = peoplePage?.endCursor ?? orgsPage?.endCursor ?? null;
           hasPreviousPage = !!afterCursor;
         }
-      } else {
-        // P3 note: Kissinger entities() does not support tag filtering server-side
-        // (only kind, first, after, before, last args exist — no tags param).
-        // For org sub-segments we fetch a larger batch so client-side tag filtering
-        // produces enough visible results per page. People tab fetches exactly PAGE_SIZE.
-        const fetchSize =
-          segment === "people" ? PAGE_SIZE : PAGE_SIZE * 4; // 200 for org sub-segments
-
-        const page = await fetchContactsPage(kind, fetchSize, afterCursor);
+      } else if (segment === "people") {
+        // People tab: paginated fetch (7k+ people, we only need PAGE_SIZE at a time)
+        const page = await fetchContactsPage("person", PAGE_SIZE, afterCursor);
         if (!page) {
           offline = true;
         } else {
-          let raw = page.contacts;
+          contacts = page.contacts.filter(
+            (p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t))
+          );
+          hasNextPage = page.hasNextPage;
+          endCursor = page.endCursor;
+          hasPreviousPage = !!afterCursor;
+        }
+      } else {
+        // Org sub-segments (vc, prospects, other-orgs):
+        // Kissinger has no server-side tag filter, and prospect-tagged orgs may appear
+        // anywhere in the 5,800+ org cursor order (e.g. beyond position 1,000).
+        // We must fetch ALL orgs and filter client-side to avoid missing any.
+        // fetchAllEntities is cached (TTL 120s) so this is one round-trip in practice.
+        try {
+          const allOrgs = await fetchAllEntities("org");
+          let raw = allOrgs;
 
-          // Apply segment filter for org sub-segments (client-side — API has no tag filter)
           if (segment === "vc") {
             raw = raw.filter((e) => classifyOrg(e.tags) === "vc");
           } else if (segment === "prospects") {
             raw = raw.filter((e) => classifyOrg(e.tags) === "prospects");
           } else if (segment === "other-orgs") {
             raw = raw.filter((e) => classifyOrg(e.tags) === "other-orgs");
-          } else if (segment === "people") {
-            // Exclude investor-tagged people
-            raw = raw.filter((p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t)));
           }
 
           contacts = raw;
-          hasNextPage = page.hasNextPage;
-          endCursor = page.endCursor;
-          hasPreviousPage = !!afterCursor;
+          // No cursor-based pagination for full-scan segments
+          hasNextPage = false;
+          endCursor = null;
+          hasPreviousPage = false;
+        } catch {
+          offline = true;
         }
       }
     }

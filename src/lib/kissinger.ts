@@ -378,7 +378,7 @@ export const fetchContactsPage = unstable_cache(
 // Fetch all entities of a kind (multi-page, for segmented views)
 // ---------------------------------------------------------------------------
 
-async function fetchAllEntities(kind: "person" | "org"): Promise<EntitySummary[]> {
+async function _fetchAllEntities(kind: "person" | "org"): Promise<EntitySummary[]> {
   const PAGE = 500;
   const all: EntitySummary[] = [];
   let cursor: string | undefined;
@@ -402,6 +402,24 @@ async function fetchAllEntities(kind: "person" | "org"): Promise<EntitySummary[]
   }
 
   return all;
+}
+
+/**
+ * Cached fetch of ALL entities of a given kind (full pagination).
+ * TTL: 120 seconds. Tag: "contacts" — call revalidateTag("contacts") after mutations.
+ *
+ * Use this for org sub-segments (vc, prospects, other-orgs) where tag-based filtering
+ * must be done client-side across the full dataset (Kissinger has no server-side tag filter).
+ * With 5,800+ orgs in the graph, prospect-tagged orgs can appear anywhere in the cursor order,
+ * so fetching a limited page (200) may miss them entirely.
+ */
+export async function fetchAllEntities(kind: "person" | "org"): Promise<EntitySummary[]> {
+  const cached = unstable_cache(
+    _fetchAllEntities,
+    [`all-entities-${kind}`],
+    { revalidate: 120, tags: ["contacts"] }
+  );
+  return cached(kind);
 }
 
 export interface SegmentedContacts {
@@ -882,6 +900,8 @@ export interface ProspectContactRaw {
   orgId?: string;
   /** Current outreach cadence stage */
   outreachStage: OutreachStage;
+  /** LinkedIn profile URL from meta (linkedin_url or linkedin key) */
+  linkedinUrl: string;
 }
 
 const PROSPECT_CONTACT_QUERY = `
@@ -965,8 +985,21 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
         const meta = Object.fromEntries(
           detail.entity.meta.map((m) => [m.key, m.value])
         );
-        const title = meta["title"] ?? "";
-        const company = meta["company"] ?? "";
+
+        // Apollo-re-enriched contacts store title/org inside a JSON blob at key "meta"
+        // rather than as direct top-level meta keys. Fall back to the nested blob when
+        // the direct keys are absent.
+        let nestedMeta: Record<string, string> = {};
+        if (meta["meta"]) {
+          try {
+            nestedMeta = JSON.parse(meta["meta"]) as Record<string, string>;
+          } catch {
+            // not JSON — ignore
+          }
+        }
+
+        const title = meta["title"] ?? nestedMeta["title"] ?? "";
+        const company = meta["company"] ?? nestedMeta["org"] ?? "";
 
         // Find the linked org via works_at edge
         const worksAtEdge = edgesData.edgesFrom.edges
@@ -1006,6 +1039,8 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
           ? (outreachStageMeta as OutreachStage)
           : "cold";
 
+        const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+
         return {
           id: person.id,
           name: person.name,
@@ -1016,6 +1051,7 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
           notes: "",
           orgId,
           outreachStage,
+          linkedinUrl,
         } satisfies ProspectContactRaw;
       })
     );
