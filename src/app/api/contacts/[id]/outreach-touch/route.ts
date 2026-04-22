@@ -33,17 +33,17 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     );
   }
 
-  const result = await recordOutreachTouch(
-    id,
-    touchNumber,
-    typeof notes === "string" ? notes : undefined
-  );
-
-  if (!result) {
-    return NextResponse.json(
-      { error: "Failed to record outreach touch — check Kissinger logs" },
-      { status: 500 }
+  let result: { interactionId: string; newStage: string };
+  try {
+    result = await recordOutreachTouch(
+      id,
+      touchNumber,
+      typeof notes === "string" ? notes : undefined
     );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[outreach-touch] recordOutreachTouch failed:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 
   revalidateTag("contacts");

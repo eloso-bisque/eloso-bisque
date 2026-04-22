@@ -13,7 +13,8 @@ const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
 
 async function gql<T = unknown>(
   query: string,
-  variables: Record<string, unknown> = {}
+  variables: Record<string, unknown> = {},
+  cacheOptions?: { tags?: string[]; revalidate?: number; noStore?: boolean }
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -22,14 +23,22 @@ async function gql<T = unknown>(
     headers["Authorization"] = `Bearer ${KISSINGER_API_TOKEN}`;
   }
 
-  const res = await fetch(KISSINGER_API_URL, {
+  const fetchInit: RequestInit & { next?: { revalidate?: number; tags?: string[] } } = {
     method: "POST",
     headers,
     body: JSON.stringify({ query, variables }),
-    // Next.js 14 cache: revalidate every 60 seconds
-    next: { revalidate: 60 },
     signal: AbortSignal.timeout(8000),
-  });
+  };
+
+  if (cacheOptions?.noStore) {
+    fetchInit.cache = "no-store";
+  } else if (cacheOptions?.tags) {
+    fetchInit.next = { tags: cacheOptions.tags };
+  } else {
+    fetchInit.next = { revalidate: cacheOptions?.revalidate ?? 60 };
+  }
+
+  const res = await fetch(KISSINGER_API_URL, fetchInit);
 
   if (!res.ok) {
     throw new Error(
@@ -66,6 +75,8 @@ export interface EntitySummary {
   tags: string[];
   updatedAt: string;
   archived: boolean;
+  /** Location extracted from meta["location"] — available on all list queries */
+  location?: string | null;
   /** Inline meta fields — only available on EntityGql (single-entity queries), not list queries */
   meta?: { key: string; value: string }[];
   /** Inline notes — only available on EntityGql (single-entity queries), not list queries */
@@ -325,6 +336,7 @@ const CONTACTS_PAGE_QUERY = `
           tags
           updatedAt
           archived
+          location
         }
       }
     }
@@ -334,7 +346,7 @@ const CONTACTS_PAGE_QUERY = `
 async function _fetchContactsPage(
   kind: "person" | "org",
   first: number,
-  after: string | undefined
+  after?: string
 ): Promise<ContactsPage | null> {
   try {
     const data = await gql<{
@@ -975,7 +987,7 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
     const enriched = await Promise.allSettled(
       prospectPersons.map(async (person) => {
         const [detail, edgesData] = await Promise.all([
-          gql<{ entity: ContactDetail }>(ENTITY_DETAIL_QUERY, { id: person.id }),
+          gql<{ entity: ContactDetail }>(ENTITY_DETAIL_QUERY, { id: person.id }, { tags: ["contacts"] }),
           gql<{ edgesFrom: { edges: { node: EntityEdge }[] } }>(
             EDGES_FROM_PERSON_QUERY,
             { entityId: person.id, first: 20 }
@@ -1100,6 +1112,59 @@ export const THESIS_MATCH_TAGS = new Set([
 
 export function isInvestorFirm(entity: EntitySummary): boolean {
   return entity.kind === "org" && entity.tags.some((t) => INVESTOR_FIRM_TAGS.has(t));
+}
+
+/**
+ * US state names and territories — used to identify US-based contacts.
+ */
+const US_STATE_NAMES = new Set([
+  "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+  "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+  "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+  "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+  "missouri", "montana", "nebraska", "nevada", "new hampshire", "new jersey",
+  "new mexico", "new york", "north carolina", "north dakota", "ohio",
+  "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina",
+  "south dakota", "tennessee", "texas", "utah", "vermont", "virginia",
+  "washington", "west virginia", "wisconsin", "wyoming",
+  // Territories
+  "puerto rico", "guam", "district of columbia", "dc",
+]);
+
+/**
+ * Returns true if the entity's location indicates a US-based contact.
+ * Handles variants like "United States", "USA", "US", "California, US",
+ * "New York, NY", "Austin, Texas", etc.
+ */
+export function isUSContact(entity: EntitySummary): boolean {
+  const loc = (entity.location ?? "").toLowerCase().trim();
+  if (!loc) return false;
+
+  // Direct country matches
+  if (loc === "us" || loc === "usa" || loc === "united states" || loc === "united states of america") {
+    return true;
+  }
+  // Contains explicit US markers
+  if (loc.includes("united states") || loc.includes(", usa") || loc.includes(", us")) {
+    return true;
+  }
+  // Matches ", US" at end (e.g. "San Francisco, CA, US")
+  if (/,\s*us\b/.test(loc)) {
+    return true;
+  }
+  // Check if location ends with a US state name or abbreviation
+  // e.g. "Austin, Texas", "New York, NY"
+  const parts = loc.split(",").map((p) => p.trim());
+  const lastPart = parts[parts.length - 1];
+  if (US_STATE_NAMES.has(lastPart)) return true;
+  // Two-letter state abbreviations (e.g. "CA", "NY", "TX") — only if there are multiple parts
+  if (parts.length >= 2 && /^[a-z]{2}$/.test(lastPart)) {
+    // Could be a US state abbreviation — we accept it if it's plausible
+    // (2-letter codes are overwhelmingly US states in this dataset)
+    return true;
+  }
+
+  return false;
 }
 
 export function isInvestorPerson(entity: EntitySummary): boolean {
@@ -1418,18 +1483,14 @@ export async function recordOutreachTouch(
   personId: string,
   touchNumber: number,
   notes?: string
-): Promise<{ interactionId: string; newStage: OutreachStage } | null> {
-  try {
-    const data = await gql<{
-      recordOutreachTouch: { interactionId: string; newStage: string };
-    }>(RECORD_OUTREACH_TOUCH_MUTATION, { personId, touchNumber, notes });
-    return {
-      interactionId: data.recordOutreachTouch.interactionId,
-      newStage: data.recordOutreachTouch.newStage as OutreachStage,
-    };
-  } catch {
-    return null;
-  }
+): Promise<{ interactionId: string; newStage: OutreachStage }> {
+  const data = await gql<{
+    recordOutreachTouch: { interactionId: string; newStage: string };
+  }>(RECORD_OUTREACH_TOUCH_MUTATION, { personId, touchNumber, notes }, { noStore: true });
+  return {
+    interactionId: data.recordOutreachTouch.interactionId,
+    newStage: data.recordOutreachTouch.newStage as OutreachStage,
+  };
 }
 
 /**
