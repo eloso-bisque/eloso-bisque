@@ -219,7 +219,7 @@ describe("generateMessage", () => {
   it("CEO title gets founder-appropriate opener", () => {
     const contact = makeContact({ name: "Iris", title: "CEO", company: "StartupCo" });
     const result = generateMessage(makeTask(contact, "Ben"));
-    expect(result.message).toMatch(/direction|trajectory/i);
+    expect(result.message).toMatch(/following|reach out directly/i);
   });
 
   it("returns task reference in result", () => {

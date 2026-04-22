@@ -29,6 +29,8 @@ export interface ProspectContact {
   notes?: string;
   /** Current outreach cadence stage */
   outreachStage?: OutreachStage;
+  /** LinkedIn profile URL */
+  linkedinUrl?: string;
 }
 
 export interface OutreachTask {
@@ -179,13 +181,13 @@ export function generateMessage(task: OutreachTask): GeneratedMessage {
   let roleOpener: string;
   const titleLower = contact.title.toLowerCase();
   if (titleLower.includes("ceo") || titleLower.includes("founder") || titleLower.includes("president")) {
-    roleOpener = `I've been following ${companyShort}'s trajectory and wanted to reach out directly to you as the person shaping its direction.`;
+    roleOpener = `I've been following what ${companyShort} is doing and wanted to reach out directly.`;
   } else if (titleLower.includes("cfo") || titleLower.includes("finance")) {
-    roleOpener = `Given your vantage point on ${companyShort}'s financial operations, I thought you might find what we're building relevant.`;
+    roleOpener = `Your vantage point on ${companyShort}'s financials is exactly why I'm reaching out.`;
   } else if (titleLower.includes("coo") || titleLower.includes("operations")) {
-    roleOpener = `With ${companyShort}'s operational scale, I thought our work on supply chain intelligence might be worth a quick look.`;
+    roleOpener = `Given what you're managing at ${companyShort}, I think what we're building is directly in your wheelhouse.`;
   } else {
-    roleOpener = `I've been looking at companies like ${companyShort} that are doing interesting things in your space and wanted to connect.`;
+    roleOpener = `I've been looking at what ${companyShort} is doing and think there's a real connection to what we're working on.`;
   }
 
   // Sector-aware hook
@@ -204,7 +206,7 @@ export function generateMessage(task: OutreachTask): GeneratedMessage {
     `Hi ${firstName} — ${ctx.intro}`,
     `${roleOpener}${sectorHook}`,
     props[0],
-    `Would love to share what we're working on — even a 20-minute call would be valuable. Open to connecting?`,
+    `Would love to pick your brain for 20 minutes if you're open to it.`,
   ].join(" ");
 
   return {

@@ -43,11 +43,18 @@ Senders:
 - Jake: technical/product — leads with the product capability and data angle
 - Drew: strategic/business — leads with business outcomes and ROI
 
+Tone rules (critical):
+- Write like a real person texting a professional contact — casual, warm, direct
+- Use contractions (I'm, we're, I've, you'd, it's)
+- Short sentences. No winding clauses.
+- NEVER use stiff phrases like "I'd be pleased to", "if you'd be open to that", "I would welcome the opportunity", "I hope this finds you well"
+- End with a casual, low-pressure CTA — something like "would love to grab 20 minutes if you're open to it" or "happy to share more if it's relevant"
+- Think: LinkedIn DM from a real founder, not a formal business letter
+
 Message rules:
 - 3–5 sentences maximum
 - Personalized to the specific person's title and company context
 - Direct and substantive — no template-sounding phrases
-- End with a soft call to action (20-minute call, open to connecting)
 - No buzzwords: no "synergy", "leverage", "ecosystem", "circle back"
 - Do not mention "AI" as a buzzword — describe specifically what Eloso does
 `;
