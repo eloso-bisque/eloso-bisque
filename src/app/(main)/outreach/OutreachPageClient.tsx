@@ -3,9 +3,10 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import OutreachTaskList from "@/components/OutreachTaskList";
-import type { OutreachTask, GeneratedMessage, TeamMember } from "@/lib/outreach";
+import SentContactsList from "@/components/SentContactsList";
+import type { OutreachTask, GeneratedMessage, TeamMember, ProspectContact } from "@/lib/outreach";
 
-type ActiveTab = "All" | TeamMember;
+type ActiveTab = "All" | TeamMember | "Sent";
 
 interface OutreachPageClientProps {
   distributed: Record<TeamMember, OutreachTask[]>;
@@ -15,6 +16,7 @@ interface OutreachPageClientProps {
   allTasks: OutreachTask[];
   allMessages: GeneratedMessage[];
   claudeEnabled?: boolean;
+  sentContacts?: ProspectContact[];
 }
 
 const BATCH_SIZE = 8;
@@ -34,6 +36,7 @@ export default function OutreachPageClient({
   allTasks,
   allMessages,
   claudeEnabled = false,
+  sentContacts = [],
 }: OutreachPageClientProps) {
   const router = useRouter();
   const [active, setActive] = useState<ActiveTab>("All");
@@ -71,10 +74,12 @@ export default function OutreachPageClient({
   const tabs: { label: ActiveTab; count: number }[] = [
     { label: "All", count: allTasks.length },
     ...teamMembers.map((m) => ({ label: m as ActiveTab, count: taskCounts[m] })),
+    { label: "Sent", count: sentContacts.length },
   ];
 
-  const activeTasks = active === "All" ? allTasks : distributed[active];
-  const activeMessages = active === "All" ? allMessages : messagesPerMember[active];
+  const isSentTab = active === "Sent";
+  const activeTasks = isSentTab ? [] : active === "All" ? allTasks : distributed[active as TeamMember];
+  const activeMessages = isSentTab ? [] : active === "All" ? allMessages : messagesPerMember[active as TeamMember];
 
   // Contacts with LinkedIn URLs from the FULL list (not filtered by tab).
   // The batch opener always steps through all prospect contacts in order,
@@ -313,12 +318,25 @@ export default function OutreachPageClient({
       )}
 
       {/* Tab panel */}
-      <div role="tabpanel" aria-label={active === "All" ? "All outreach tasks" : `${active}'s outreach tasks`}>
-        <OutreachTaskList
-          tasks={activeTasks}
-          messages={activeMessages}
-          claudeEnabled={claudeEnabled}
-        />
+      <div
+        role="tabpanel"
+        aria-label={
+          active === "Sent"
+            ? "Sent contacts"
+            : active === "All"
+            ? "All outreach tasks"
+            : `${active}'s outreach tasks`
+        }
+      >
+        {isSentTab ? (
+          <SentContactsList contacts={sentContacts} />
+        ) : (
+          <OutreachTaskList
+            tasks={activeTasks}
+            messages={activeMessages}
+            claudeEnabled={claudeEnabled}
+          />
+        )}
       </div>
     </div>
   );

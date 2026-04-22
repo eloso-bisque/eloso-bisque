@@ -5,6 +5,8 @@ import {
   TEAM_MEMBERS,
   type ProspectContact,
   type TeamMember,
+  type OutreachTask,
+  type GeneratedMessage,
 } from "@/lib/outreach";
 import type { ProspectContactRaw } from "@/lib/kissinger";
 import OutreachPageClient from "./OutreachPageClient";
@@ -24,6 +26,7 @@ function mapContact(raw: ProspectContactRaw): ProspectContact {
     fitTier: raw.fitTier,
     notes: raw.notes,
     outreachStage: raw.outreachStage,
+    linkedinUrl: raw.linkedinUrl || undefined,
   };
 }
 
@@ -36,7 +39,7 @@ export default async function OutreachPage() {
 
   // Map and sort: fit-high first, then alphabetically by company
   const fitOrder = { high: 0, medium: 1, low: 2 };
-  const contacts: ProspectContact[] = (rawContacts ?? [])
+  const allMappedContacts: ProspectContact[] = (rawContacts ?? [])
     .map(mapContact)
     .sort((a, b) => {
       const fitDiff = (fitOrder[a.fitTier] ?? 9) - (fitOrder[b.fitTier] ?? 9);
@@ -44,7 +47,15 @@ export default async function OutreachPage() {
       return a.company.localeCompare(b.company);
     });
 
-  // Distribute across Ben/Jake/Drew
+  // Split into active (cold = not yet contacted) and sent (touched or responded)
+  const sentContacts: ProspectContact[] = allMappedContacts.filter(
+    (c) => c.outreachStage && c.outreachStage !== "cold"
+  );
+  const contacts: ProspectContact[] = allMappedContacts.filter(
+    (c) => !c.outreachStage || c.outreachStage === "cold"
+  );
+
+  // Distribute active contacts across Ben/Jake/Drew
   const distributed = distributeContacts(contacts);
 
   // Pre-generate all messages (server-side, no API key needed for templates)
@@ -60,6 +71,17 @@ export default async function OutreachPage() {
     Drew: distributed.Drew.length,
   };
 
+  // Build the "All" list: all active tasks in sorted order
+  const allTasks: OutreachTask[] = TEAM_MEMBERS.flatMap((m) => distributed[m]).sort(
+    (a, b) => {
+      const fitOrder = { high: 0, medium: 1, low: 2 };
+      const fitDiff = (fitOrder[a.contact.fitTier] ?? 9) - (fitOrder[b.contact.fitTier] ?? 9);
+      if (fitDiff !== 0) return fitDiff;
+      return a.contact.company.localeCompare(b.contact.company);
+    }
+  );
+  const allMessages: GeneratedMessage[] = allTasks.map(generateMessage);
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
@@ -67,8 +89,8 @@ export default async function OutreachPage() {
         <div>
           <h1 className="text-3xl font-bold text-bisque-900">Outreach</h1>
           <p className="text-sm text-bisque-500 mt-1">
-            Personalized LinkedIn outreach tasks · {contacts.length} prospect contact
-            {contacts.length !== 1 ? "s" : ""}
+            Personalized LinkedIn outreach tasks · {contacts.length} active
+            {sentContacts.length > 0 ? ` · ${sentContacts.length} sent` : ""}
           </p>
         </div>
         {offline && (
@@ -84,7 +106,10 @@ export default async function OutreachPage() {
         messagesPerMember={messagesPerMember}
         taskCounts={taskCounts}
         teamMembers={TEAM_MEMBERS}
+        allTasks={allTasks}
+        allMessages={allMessages}
         claudeEnabled={claudeEnabled}
+        sentContacts={sentContacts}
       />
     </div>
   );
