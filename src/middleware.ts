@@ -23,6 +23,15 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Allow service-to-service calls that present a valid X-Internal-Secret header.
+  // This check runs before the session cookie check so internal API calls (e.g.
+  // scheduled jobs run by Lobster) can reach route handlers without a browser session.
+  const internalSecret = process.env.LOBSTER_INTERNAL_SECRET;
+  const providedSecret = request.headers.get("X-Internal-Secret");
+  if (internalSecret && providedSecret && providedSecret === internalSecret) {
+    return NextResponse.next();
+  }
+
   const sessionCookie = request.cookies.get(COOKIE_NAME);
 
   if (!sessionCookie || sessionCookie.value !== SESSION_VALUE) {
