@@ -81,22 +81,37 @@ const SECTOR_PREFERENCE: Record<string, TeamMember> = {
  *
  * Priority:
  * 1. First sector tag that has a preference mapping
- * 2. Round-robin by index (fallback)
+ * 2. Round-robin by fallbackIndex (fallback — only counts unclassified contacts)
+ *
+ * NOTE: This function is intentionally kept pure for testing. The caller
+ * (`distributeContacts`) is responsible for tracking the fallback counter so
+ * that the round-robin is correct across only the unclassified contacts.
  */
 export function assignContact(
   contact: ProspectContact,
-  index: number
+  fallbackIndex: number
 ): TeamMember {
   for (const tag of contact.sector) {
     const pref = SECTOR_PREFERENCE[tag];
     if (pref) return pref;
   }
-  // Round-robin fallback
-  return TEAM_MEMBERS[index % TEAM_MEMBERS.length];
+  // Round-robin fallback — index must count only unclassified contacts
+  return TEAM_MEMBERS[fallbackIndex % TEAM_MEMBERS.length];
 }
 
 /**
  * Distribute a list of contacts across Ben, Jake, and Drew.
+ *
+ * Each contact is assigned to EXACTLY ONE team member — no contact ID can
+ * appear in more than one bucket. This is a strict partition.
+ *
+ * Assignment priority:
+ * 1. Sector affinity (first matching tag in SECTOR_PREFERENCE wins)
+ * 2. Round-robin across team members (fallback for unclassified contacts)
+ *
+ * The round-robin fallback counter increments only for unclassified contacts,
+ * ensuring even distribution regardless of how many contacts have sector tags.
+ *
  * Returns a map from TeamMember → OutreachTask[].
  */
 export function distributeContacts(contacts: ProspectContact[]): Record<TeamMember, OutreachTask[]> {
@@ -106,15 +121,55 @@ export function distributeContacts(contacts: ProspectContact[]): Record<TeamMemb
     Drew: [],
   };
 
-  contacts.forEach((contact, i) => {
-    const assignee = assignContact(contact, i);
+  // Separate fallback counter — only increments for contacts with no sector
+  // preference match, ensuring true round-robin across unclassified contacts.
+  let fallbackCounter = 0;
+
+  const now = new Date().toISOString();
+
+  for (const contact of contacts) {
+    // Determine if this contact has a sector-preference match
+    let sectorAssignee: TeamMember | null = null;
+    for (const tag of contact.sector) {
+      const pref = SECTOR_PREFERENCE[tag];
+      if (pref) {
+        sectorAssignee = pref;
+        break;
+      }
+    }
+
+    let assignee: TeamMember;
+    if (sectorAssignee !== null) {
+      assignee = sectorAssignee;
+    } else {
+      assignee = TEAM_MEMBERS[fallbackCounter % TEAM_MEMBERS.length];
+      fallbackCounter += 1;
+    }
+
     result[assignee].push({
       id: `${contact.id}-${assignee}`,
       contact,
       assignee,
-      generatedAt: new Date().toISOString(),
+      generatedAt: now,
     });
-  });
+  }
+
+  // Sanity check (dev only): assert no contact ID appears in more than one bucket.
+  if (process.env.NODE_ENV !== "production") {
+    const seen = new Map<string, TeamMember>();
+    for (const member of TEAM_MEMBERS) {
+      for (const task of result[member]) {
+        const prior = seen.get(task.contact.id);
+        if (prior !== undefined) {
+          throw new Error(
+            `[distributeContacts] Contact "${task.contact.id}" (${task.contact.name}) ` +
+            `assigned to both ${prior} and ${member}. Distribution is not a strict partition.`
+          );
+        }
+        seen.set(task.contact.id, member);
+      }
+    }
+  }
 
   return result;
 }

@@ -154,6 +154,53 @@ describe("distributeContacts", () => {
       expect(() => new Date(task.generatedAt)).not.toThrow();
     }
   });
+
+  it("no contact ID appears in more than one bucket (strict partition)", () => {
+    const contacts: ProspectContact[] = [
+      makeContact({ id: "1", name: "Alice", sector: ["defense"] }),
+      makeContact({ id: "2", name: "Bob", sector: ["enterprise-tech"] }),
+      makeContact({ id: "3", name: "Carol", sector: ["rail-transportation-equipment"] }),
+      makeContact({ id: "4", name: "Dan", sector: [] }),
+      makeContact({ id: "5", name: "Eve", sector: [] }),
+      makeContact({ id: "6", name: "Frank", sector: [] }),
+      makeContact({ id: "7", name: "Grace", sector: ["defense"] }),
+      makeContact({ id: "8", name: "Hank", sector: ["robotics"] }),
+    ];
+    const result = distributeContacts(contacts);
+    const allTasks = [...result.Ben, ...result.Jake, ...result.Drew];
+
+    // Total contacts == total tasks
+    expect(allTasks.length).toBe(contacts.length);
+
+    // No contact ID appears more than once
+    const ids = allTasks.map((t) => t.contact.id);
+    const uniqueIds = new Set(ids);
+    expect(uniqueIds.size).toBe(ids.length);
+  });
+
+  it("round-robin fallback distributes unclassified contacts evenly (not by global index)", () => {
+    // 3 unclassified contacts should go to Ben(0), Jake(1), Drew(2) in order
+    // even though their global array positions might be mixed.
+    const contacts: ProspectContact[] = [
+      makeContact({ id: "s1", sector: ["defense"] }),   // → Ben (sector)
+      makeContact({ id: "u1", sector: [] }),              // → Ben (fallback 0)
+      makeContact({ id: "s2", sector: ["robotics"] }),   // → Jake (sector)
+      makeContact({ id: "u2", sector: [] }),              // → Jake (fallback 1)
+      makeContact({ id: "s3", sector: ["rail-transportation-equipment"] }), // → Drew (sector)
+      makeContact({ id: "u3", sector: [] }),              // → Drew (fallback 2)
+    ];
+    const result = distributeContacts(contacts);
+
+    // Sector-assigned contacts
+    expect(result.Ben.some((t) => t.contact.id === "s1")).toBe(true);
+    expect(result.Jake.some((t) => t.contact.id === "s2")).toBe(true);
+    expect(result.Drew.some((t) => t.contact.id === "s3")).toBe(true);
+
+    // Fallback-assigned contacts distribute Ben → Jake → Drew
+    expect(result.Ben.some((t) => t.contact.id === "u1")).toBe(true);
+    expect(result.Jake.some((t) => t.contact.id === "u2")).toBe(true);
+    expect(result.Drew.some((t) => t.contact.id === "u3")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
