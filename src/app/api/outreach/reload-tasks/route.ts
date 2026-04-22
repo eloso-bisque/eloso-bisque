@@ -86,7 +86,20 @@ async function updateEntityTags(id: string, newTags: string[]): Promise<boolean>
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  // Allow internal callers (e.g. Lobster scheduler) to bypass cookie auth
+  // via a shared secret header. The secret must match LOBSTER_INTERNAL_SECRET.
+  const internalSecret = process.env.LOBSTER_INTERNAL_SECRET;
+  const providedSecret = request.headers.get("X-Internal-Secret");
+  const isInternalCall =
+    internalSecret && providedSecret && providedSecret === internalSecret;
+
+  if (!isInternalCall) {
+    // No cookie/session auth implemented yet beyond the internal secret —
+    // reject unauthenticated callers.
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     // Fetch all person entities (includes location field for US detection).
     // This is cached at TTL=120s in fetchAllEntities — fine for reads.
