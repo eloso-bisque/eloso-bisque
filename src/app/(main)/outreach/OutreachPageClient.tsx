@@ -95,7 +95,13 @@ export default function OutreachPageClient({
     }
     for (const contact of nextBatch) {
       const url = contact.linkedinUrl!;
-      window.open(url.startsWith("http") ? url : `https://${url}`, "_blank");
+      const a = document.createElement("a");
+      a.href = url.startsWith("http") ? url : `https://${url}`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
     setBatchOffset((prev) => prev + nextBatch.length);
   }, [nextBatch]);
