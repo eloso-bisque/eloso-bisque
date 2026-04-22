@@ -29,6 +29,8 @@ export default function OutreachPageClient({
 }: OutreachPageClientProps) {
   const [active, setActive] = useState<ActiveTab>("All");
   // batchOffset tracks how many LinkedIn profiles have already been opened
+  // across the full allTasks list (not the active tab) — button always works
+  // through the entire "Personalized LinkedIn outreach tasks" list.
   const [batchOffset, setBatchOffset] = useState(0);
 
   const tabs: { label: ActiveTab; count: number }[] = [
@@ -39,8 +41,10 @@ export default function OutreachPageClient({
   const activeTasks = active === "All" ? allTasks : distributed[active];
   const activeMessages = active === "All" ? allMessages : messagesPerMember[active];
 
-  // Contacts with LinkedIn URLs, in the order they appear in the active tab
-  const linkedinContacts = activeTasks
+  // Contacts with LinkedIn URLs from the FULL list (not filtered by tab).
+  // The batch opener always steps through all prospect contacts in order,
+  // regardless of which team-member tab is currently selected.
+  const linkedinContacts = allTasks
     .map((t) => t.contact)
     .filter((c) => c.linkedinUrl);
 
@@ -63,10 +67,11 @@ export default function OutreachPageClient({
 
   const handleTabChange = (tab: ActiveTab) => {
     setActive(tab);
-    setBatchOffset(0);
+    // Do NOT reset batchOffset — the opener works through the full list
+    // independent of which team tab is active.
   };
 
-  // Button label
+  // Button label — reflects progress through the full prospect list
   let openButtonLabel: string;
   if (totalWithLinkedin === 0) {
     openButtonLabel = "No LinkedIn profiles";
@@ -75,7 +80,7 @@ export default function OutreachPageClient({
   } else {
     const remaining = totalWithLinkedin - batchOffset;
     const batchCount = Math.min(BATCH_SIZE, remaining);
-    openButtonLabel = `Open Next ${batchCount} LinkedIn${batchOffset > 0 ? ` (${batchOffset}/${totalWithLinkedin} done)` : ""}`;
+    openButtonLabel = `Open Next ${batchCount} LinkedIn${batchOffset > 0 ? ` (${batchOffset}/${totalWithLinkedin} done)` : ` (${totalWithLinkedin} total)`}`;
   }
 
   return (
@@ -152,10 +157,10 @@ export default function OutreachPageClient({
           }`}
           title={
             totalWithLinkedin === 0
-              ? "No contacts with LinkedIn URLs in this view"
+              ? "No prospect contacts have LinkedIn URLs"
               : exhausted
               ? "All profiles have been opened. Click to reset."
-              : `Opens ${Math.min(BATCH_SIZE, totalWithLinkedin - batchOffset)} LinkedIn profiles in new tabs`
+              : `Opens ${Math.min(BATCH_SIZE, totalWithLinkedin - batchOffset)} LinkedIn profiles in new tabs (works through all ${totalWithLinkedin} prospects regardless of active tab)`
           }
         >
           <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
