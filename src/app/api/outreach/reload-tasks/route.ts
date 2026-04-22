@@ -86,17 +86,27 @@ async function updateEntityTags(id: string, newTags: string[]): Promise<boolean>
   }
 }
 
+const COOKIE_NAME = "eloso_session";
+const SESSION_VALUE = "authenticated";
+
 export async function POST(request: Request) {
-  // Allow internal callers (e.g. Lobster scheduler) to bypass cookie auth
-  // via a shared secret header. The secret must match LOBSTER_INTERNAL_SECRET.
+  // Allow access if EITHER:
+  //   1. The request has a valid X-Internal-Secret header (scheduled jobs / Lobster)
+  //   2. The request has a valid browser session cookie (authenticated users)
   const internalSecret = process.env.LOBSTER_INTERNAL_SECRET;
   const providedSecret = request.headers.get("X-Internal-Secret");
   const isInternalCall =
     internalSecret && providedSecret && providedSecret === internalSecret;
 
-  if (!isInternalCall) {
-    // No cookie/session auth implemented yet beyond the internal secret —
-    // reject unauthenticated callers.
+  // Check session cookie for browser-based access
+  // Next.js Request wraps the Web API Request; cookies are available via headers.
+  const cookieHeader = request.headers.get("cookie") ?? "";
+  const hasSessionCookie = cookieHeader
+    .split(";")
+    .map((c) => c.trim())
+    .some((c) => c === `${COOKIE_NAME}=${SESSION_VALUE}`);
+
+  if (!isInternalCall && !hasSessionCookie) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
