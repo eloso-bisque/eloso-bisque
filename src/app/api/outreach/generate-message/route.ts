@@ -69,6 +69,10 @@ function buildClaudePrompt(
     Drew: "Drew is the co-founder/COO, leading with strategic business outcomes and ROI.",
   };
 
+  const notesSection = contact.notes
+    ? `\nNotes about this contact: ${contact.notes}`
+    : "";
+
   return `Write a LinkedIn outreach message from ${assignee} to ${contact.name}.
 
 Contact details:
@@ -76,7 +80,7 @@ Contact details:
 - Title: ${contact.title}
 - Company: ${contact.company}
 - Sector: ${contact.sector.join(", ") || "manufacturing"}
-- ICP fit: ${contact.fitTier}
+- ICP fit: ${contact.fitTier}${notesSection}
 
 Sender: ${assignee}
 ${senderContext[assignee]}
@@ -120,8 +124,8 @@ export async function POST(request: NextRequest) {
       const client = new Anthropic({ apiKey });
 
       const response = await client.messages.create({
-        model: "claude-haiku-4-5",
-        max_tokens: 300,
+        model: "claude-opus-4-5",
+        max_tokens: 180,
         system: ELOSO_CONTEXT,
         messages: [
           {
