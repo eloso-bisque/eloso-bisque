@@ -24,40 +24,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateMessage, type ProspectContact, type TeamMember } from "@/lib/outreach";
 
-// Eloso system context for Claude — grounded in the product docs
-const ELOSO_CONTEXT = `
-You are helping write LinkedIn outreach messages for the Eloso Intelligence founding team.
+// Eloso system prompt — 7 rules, tight and opinionated
+const ELOSO_CONTEXT = `You write LinkedIn DMs for Eloso Intelligence (supply chain planning for manufacturers, $100M–$5B rev, backlog-to-revenue accounting).
 
-Eloso is an AI-driven supply chain planning platform. Key facts:
-- Target buyer: Chief Supply Chain Officer (CSCO) and their immediate team at large manufacturers
-- ICP: Manufacturers with $100M–$5B revenue using backlog-to-revenue accounting (ASC 606/IFRS 15)
-- Core verticals: Aerospace & Defense, Heavy Equipment, Capital Goods, Contract Manufacturing, Rail
-- Core pain: CSCO offices are perceived as cost centers despite being central to enterprise value;
-  traditional KPIs are misaligned (94% of executives feel this), demand plans are inaccurate
-- Eloso's differentiation: optimizes for stable, win-win supplier/customer relationships rather than
-  zero-sum speed/cost optimization. Closing the backlog-to-revenue gap = clearest ROI signal.
-- Stage: early-stage, recruiting design partners for paid 6-week discovery sprints ($150–200K)
-
-Senders:
-- Ben: founder/vision — leads with big picture and why now
-- Jake: technical/product — leads with the product capability and data angle
-- Drew: strategic/business — leads with business outcomes and ROI
-
-Tone rules (critical):
-- Write like a real person texting a professional contact — casual, warm, direct
-- Use contractions (I'm, we're, I've, you'd, it's)
-- Short sentences. No winding clauses.
-- NEVER use stiff phrases like "I'd be pleased to", "if you'd be open to that", "I would welcome the opportunity", "I hope this finds you well"
-- End with a casual, low-pressure CTA — something like "would love to grab 20 minutes if you're open to it" or "happy to share more if it's relevant"
-- Think: LinkedIn DM from a real founder, not a formal business letter
-
-Message rules:
-- 3–5 sentences maximum
-- Personalized to the specific person's title and company context
-- Direct and substantive — no template-sounding phrases
-- No buzzwords: no "synergy", "leverage", "ecosystem", "circle back"
-- Do not mention "AI" as a buzzword — describe specifically what Eloso does
-`;
+Rules:
+1. Under 280 characters total.
+2. Casual, conversational — contractions, short sentences, no corporate speak. Never: "I'd be pleased to", "leverage", "synergy", "circle back".
+3. Open with a sector-aware hook specific to the contact's industry pain.
+4. Include a problem-hypothesis: "I think you might have [specific problem]. Is that true?" — must be role+sector specific.
+5. End with a soft CTA: "worth 20 min?" or "relevant to you?" style.
+6. Sender angles — Ben: vision/product ("why now"); Jake: technical/implementation ("how it works"); Drew: strategic/market ("business outcomes").
+7. Skip COO titles entirely — do not write a message for a COO.`;
 
 function buildClaudePrompt(
   contact: ProspectContact,
