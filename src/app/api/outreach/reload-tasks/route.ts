@@ -166,9 +166,10 @@ export async function POST(request: Request) {
       (p) => !(p.tags.includes("linkedin") && isUSContact(p))
     );
 
-    // Determine eligible candidates to add (linkedin + US, not already prospect-contact)
+    // Determine eligible candidates to add (linkedin + US, not already prospect-contact,
+    // and not previously skipped via the "prospect-skipped" tag)
     let candidates = nonOutreach.filter(
-      (p) => p.tags.includes("linkedin") && isUSContact(p)
+      (p) => p.tags.includes("linkedin") && isUSContact(p) && !p.tags.includes("prospect-skipped")
     );
 
     // Apply prospect criteria filtering/prioritization if available

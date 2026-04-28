@@ -82,6 +82,10 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
   const [markingTouch, setMarkingTouch] = useState(false);
   const [touchError, setTouchError] = useState<string | null>(null);
 
+  // Skip state
+  const [skipped, setSkipped] = useState(false);
+  const [skipping, setSkipping] = useState(false);
+
   // Log Response drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -157,6 +161,26 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
     }
   }, [contact.id, touchNumber]);
 
+  const handleSkip = useCallback(async () => {
+    setSkipping(true);
+    try {
+      const res = await fetch("/api/outreach/skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entityId: contact.id }),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setSkipped(true);
+    } catch (err) {
+      setTouchError(err instanceof Error ? err.message : "Failed to skip");
+    } finally {
+      setSkipping(false);
+    }
+  }, [contact.id]);
+
   const handleResponseSuccess = useCallback((responseType: string) => {
     setDrawerOpen(false);
     setStage("responded");
@@ -217,7 +241,7 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
         />
       )}
 
-      <div className="bg-white rounded-xl border border-bisque-100 shadow-sm overflow-hidden">
+      <div className={`rounded-xl border shadow-sm overflow-hidden transition-all ${skipped ? "bg-gray-50 border-gray-200 opacity-60" : "bg-white border-bisque-100"}`}>
         {/* Card header */}
         <div className="px-4 md:px-5 py-4">
           <div className="flex items-start justify-between gap-3">
@@ -310,6 +334,20 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
                   Responded ✓
                 </span>
               )}
+              {/* Skip button / Skipped badge */}
+              {skipped ? (
+                <span className="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 border border-gray-200 text-gray-500">
+                  Skipped ✓
+                </span>
+              ) : (
+                <button
+                  onClick={handleSkip}
+                  disabled={skipping}
+                  className="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50 hover:text-gray-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {skipping ? "Skipping…" : "Skip"}
+                </button>
+              )}
             </div>
           </div>
 
@@ -388,6 +426,21 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
               <span className="flex items-center justify-center px-3 py-2.5 min-h-[44px] text-sm font-medium rounded-lg bg-green-100 border border-green-200 text-green-700 whitespace-nowrap">
                 Responded ✓
               </span>
+            )}
+            {/* Mobile: Skip / Skipped */}
+            {skipped ? (
+              <span className="flex items-center justify-center px-3 py-2.5 min-h-[44px] text-sm font-medium rounded-lg bg-gray-100 border border-gray-200 text-gray-500 whitespace-nowrap">
+                Skipped ✓
+              </span>
+            ) : (
+              <button
+                onClick={handleSkip}
+                disabled={skipping}
+                className="flex items-center justify-center px-3 py-2.5 min-h-[44px] text-sm font-medium rounded-lg border border-gray-200 text-gray-400 transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                aria-label="Skip this prospect"
+              >
+                {skipping ? "…" : "Skip"}
+              </button>
             )}
             <button
               onClick={() => setExpanded((v) => !v)}
