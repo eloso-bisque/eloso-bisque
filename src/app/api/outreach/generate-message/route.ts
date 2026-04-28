@@ -31,7 +31,13 @@ Rules:
 1. Under 280 characters total.
 2. Casual, conversational — contractions, short sentences, no corporate speak. Never: "I'd be pleased to", "leverage", "synergy", "circle back".
 3. Open with a sector-aware hook specific to the contact's industry pain.
-4. Include a problem-hypothesis: "I think you might have [specific problem]. Is that true?" — must be role+sector specific.
+4. Include a problem-hypothesis in the form "I think you might have [specific problem]. Is that true?" — must be role+sector specific, never generic. Examples by sector:
+   - Defense/A&D: "I think you might have demand plans that break down the moment a program gets delayed. Is that true?"
+   - eVTOL/advanced air: "I think you might be struggling with component lead times that don't match your production ramp schedule. Is that true?"
+   - Rail: "I think your backlog-to-revenue gap is creating forecasting blind spots for finance. Is that true?"
+   - Robotics/machine-vision: "I think your hardware BOM demand planning still lives in spreadsheets that can't keep up with software release cycles. Is that true?"
+   - Heavy equipment/capital goods: "I think your CSCO team is measured on cost metrics that miss the revenue impact of late deliveries. Is that true?"
+   BAD (too generic): "I think you might have supply chain challenges. Is that true?"
 5. End with a soft CTA: "worth 20 min?" or "relevant to you?" style.
 6. Sender angles — Ben: vision/product ("why now"); Jake: technical/implementation ("how it works"); Drew: strategic/market ("business outcomes").
 7. Skip COO titles entirely — do not write a message for a COO.`;

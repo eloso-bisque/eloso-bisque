@@ -245,16 +245,20 @@ export function generateMessage(task: OutreachTask): GeneratedMessage {
     roleOpener = `I've been looking at what ${companyShort} is doing and think there's a real connection to what we're working on.`;
   }
 
-  // Sector-aware hook
+  // Sector-aware hook with specific pain point and problem hypothesis
   let sectorHook = "";
   if (contact.sector.some((s) => s.includes("defense"))) {
-    sectorHook = " Defense-sector supply chains face unique challenges around backlog depth and component lead times — exactly the problem we're built for.";
-  } else if (contact.sector.includes("evtol") || contact.sector.includes("ev-battery")) {
-    sectorHook = " The supply chain complexity for next-gen mobility is intense — long component lead times, strict quality requirements, and huge backlog pressure.";
+    sectorHook = " Defense supply chains break when programs slip — demand plans that assumed a delivery date are suddenly wrong by months, and the backlog depth hides it until it's too late.";
+  } else if (contact.sector.includes("evtol")) {
+    sectorHook = " eVTOL production ramps are brutal — component lead times built for aerospace volumes don't match the pace your program needs, and that gap shows up in the backlog before it shows up in the P&L.";
+  } else if (contact.sector.includes("ev-battery")) {
+    sectorHook = " EV supply chains have a unique problem: battery cell lead times are long, specs change fast, and demand plans are obsolete before they're published.";
   } else if (contact.sector.includes("rail-transportation-equipment")) {
-    sectorHook = " Rail equipment manufacturing is a great example of where backlog-to-revenue gap creates real pain at scale.";
-  } else if (contact.sector.includes("robotics") || contact.sector.includes("machine-vision") || contact.sector.includes("enterprise-tech")) {
-    sectorHook = " Enterprise tech supply chains — especially at the hardware-software interface — are where demand planning inaccuracies hit hardest.";
+    sectorHook = " Rail equipment backlogs are long and the revenue recognition gap is real — components arriving months before the car ships means cash tied up with no revenue signal.";
+  } else if (contact.sector.includes("robotics") || contact.sector.includes("machine-vision")) {
+    sectorHook = " Robotics hardware BOMs are a demand planning nightmare — hardware lead times are 16-20 weeks, software releases ship on 2-week cycles, and the mismatch creates constant expediting costs.";
+  } else if (contact.sector.includes("enterprise-tech")) {
+    sectorHook = " Hardware-software supply chains are where demand planning inaccuracies hit hardest — one silicon shortage can stall an entire software release cycle.";
   }
 
   const message = [
