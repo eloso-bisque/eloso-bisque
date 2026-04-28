@@ -36,9 +36,24 @@ Rules:
 6. Sender angles — Ben: vision/product ("why now"); Jake: technical/implementation ("how it works"); Drew: strategic/market ("business outcomes").
 7. Skip COO titles entirely — do not write a message for a COO.`;
 
+/** Pass 1 prompt: ask Haiku to simulate the recipient's mindset */
+function buildRecipientSimulationPrompt(contact: ProspectContact): string {
+  return `You are simulating the mindset of a supply chain executive receiving a cold LinkedIn DM.
+
+Contact:
+- Name: ${contact.name}
+- Title: ${contact.title}
+- Company: ${contact.company}
+- Sector: ${contact.sector.join(", ") || "manufacturing"}
+
+In 2–3 sentences, describe: (1) what this person likely cares about day-to-day, and (2) their most probable operational pain given their role and sector. Be specific. No generic statements.`;
+}
+
+/** Pass 2 prompt: build the final message using recipient context */
 function buildClaudePrompt(
   contact: ProspectContact,
-  assignee: TeamMember
+  assignee: TeamMember,
+  recipientContext: string
 ): string {
   const senderContext: Record<TeamMember, string> = {
     Ben: "Ben is the founder/CEO, leading with vision and the 'why now' angle.",
@@ -50,7 +65,12 @@ function buildClaudePrompt(
     ? `\nNotes about this contact: ${contact.notes}`
     : "";
 
-  return `Write a LinkedIn outreach message from ${assignee} to ${contact.name}.
+  return `Recipient context (from simulation):
+${recipientContext}
+
+---
+
+Write a LinkedIn outreach message from ${assignee} to ${contact.name}.
 
 Contact details:
 - Name: ${contact.name}
@@ -94,12 +114,30 @@ export async function POST(request: NextRequest) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
-  // --- Claude path ---
+  // --- Claude path (two-pass: Haiku → Opus) ---
   if (apiKey) {
     try {
       const { default: Anthropic } = await import("@anthropic-ai/sdk");
       const client = new Anthropic({ apiKey });
 
+      // Pass 1 — Haiku infers recipient context (what they care about, their likely pain)
+      const simulationResponse = await client.messages.create({
+        model: "claude-haiku-4-5",
+        max_tokens: 120,
+        messages: [
+          {
+            role: "user",
+            content: buildRecipientSimulationPrompt(contact),
+          },
+        ],
+      });
+
+      const recipientContext =
+        simulationResponse.content[0].type === "text"
+          ? simulationResponse.content[0].text.trim()
+          : "";
+
+      // Pass 2 — Opus writes the final message using recipient context + all rules
       const response = await client.messages.create({
         model: "claude-opus-4-5",
         max_tokens: 180,
@@ -107,7 +145,7 @@ export async function POST(request: NextRequest) {
         messages: [
           {
             role: "user",
-            content: buildClaudePrompt(contact, assignee),
+            content: buildClaudePrompt(contact, assignee, recipientContext),
           },
         ],
       });
