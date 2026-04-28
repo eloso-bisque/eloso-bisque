@@ -24,6 +24,8 @@
 
 import { NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
+import { readFile } from "fs/promises";
+import path from "path";
 import { fetchAllEntities, isUSContact } from "@/lib/kissinger";
 
 const KISSINGER_API_URL =
@@ -32,6 +34,39 @@ const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
 
 /** Target number of outreach tasks after reload. */
 const FILL_TARGET = 100;
+
+/** Prospect criteria file path (written by daily refinement job). */
+const CRITERIA_FILE = path.join(
+  process.env.HOME ?? "/home/lobster",
+  "lobster-workspace/data/prospect-criteria.json"
+);
+
+/** Prospect criteria from the daily refinement job. */
+interface ProspectCriteria {
+  preferred_titles?: string[];
+  excluded_titles?: string[];
+  preferred_sectors?: string[];
+  excluded_sectors?: string[];
+  preferred_company_size?: string;
+  notes?: string;
+}
+
+/** Load prospect criteria from disk. Returns null if file doesn't exist or is malformed. */
+async function loadProspectCriteria(): Promise<ProspectCriteria | null> {
+  try {
+    const raw = await readFile(CRITERIA_FILE, "utf-8");
+    return JSON.parse(raw) as ProspectCriteria;
+  } catch {
+    // File doesn't exist yet or is malformed — ignore
+    return null;
+  }
+}
+
+/** Check if a title matches any of the given keywords (case-insensitive substring). */
+function titleMatches(title: string, keywords: string[]): boolean {
+  const lower = title.toLowerCase();
+  return keywords.some((kw) => lower.includes(kw.toLowerCase()));
+}
 
 /** Minimal gql helper (no cache — mutations must bypass Next.js cache). */
 async function gqlMutate<T = unknown>(
@@ -111,6 +146,9 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Load prospect criteria (written by daily refinement job, optional)
+    const criteria = await loadProspectCriteria();
+
     // Fetch all person entities (includes location field for US detection).
     // This is cached at TTL=120s in fetchAllEntities — fine for reads.
     // We pass cache: no-store on mutations only.
@@ -129,9 +167,58 @@ export async function POST(request: Request) {
     );
 
     // Determine eligible candidates to add (linkedin + US, not already prospect-contact)
-    const candidates = nonOutreach.filter(
+    let candidates = nonOutreach.filter(
       (p) => p.tags.includes("linkedin") && isUSContact(p)
     );
+
+    // Apply prospect criteria filtering/prioritization if available
+    if (criteria) {
+      const excludedTitles = criteria.excluded_titles ?? [];
+      const preferredTitles = criteria.preferred_titles ?? [];
+      const excludedSectors = criteria.excluded_sectors ?? [];
+      const preferredSectors = criteria.preferred_sectors ?? [];
+
+      // Filter: skip excluded titles
+      if (excludedTitles.length > 0) {
+        candidates = candidates.filter((p) => {
+          const title = p.meta?.find((m) => m.key === "title")?.value ?? "";
+          return !titleMatches(title, excludedTitles);
+        });
+      }
+
+      // Filter: skip excluded sectors (via person tags)
+      if (excludedSectors.length > 0) {
+        candidates = candidates.filter((p) => {
+          const personTags = p.tags.map((t) => t.toLowerCase());
+          return !excludedSectors.some((s) =>
+            personTags.includes(s.toLowerCase())
+          );
+        });
+      }
+
+      // Prioritize: preferred titles and sectors go first
+      if (preferredTitles.length > 0 || preferredSectors.length > 0) {
+        candidates.sort((a, b) => {
+          const aTitle = a.meta?.find((m) => m.key === "title")?.value ?? "";
+          const bTitle = b.meta?.find((m) => m.key === "title")?.value ?? "";
+          const aTags = a.tags.map((t) => t.toLowerCase());
+          const bTags = b.tags.map((t) => t.toLowerCase());
+
+          const aPreferred =
+            (preferredTitles.length > 0 && titleMatches(aTitle, preferredTitles)) ||
+            (preferredSectors.length > 0 &&
+              preferredSectors.some((s) => aTags.includes(s.toLowerCase())));
+          const bPreferred =
+            (preferredTitles.length > 0 && titleMatches(bTitle, preferredTitles)) ||
+            (preferredSectors.length > 0 &&
+              preferredSectors.some((s) => bTags.includes(s.toLowerCase())));
+
+          if (aPreferred && !bPreferred) return -1;
+          if (!aPreferred && bPreferred) return 1;
+          return 0;
+        });
+      }
+    }
 
     // How many slots to fill
     const currentKept = stillQualify.length;

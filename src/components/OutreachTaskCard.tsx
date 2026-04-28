@@ -85,6 +85,13 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
   // Log Response drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
 
+  // Feedback state
+  const [feedbackThumb, setFeedbackThumb] = useState<"up" | "down" | null>(null);
+  const [feedbackText, setFeedbackText] = useState("");
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [showFeedbackInput, setShowFeedbackInput] = useState(false);
+
   const touchNumber = nextTouchNumber(stage);
 
   const handleCopy = useCallback(async () => {
@@ -157,6 +164,35 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
     setTouchError(null);
     console.log("Response logged:", responseType);
   }, []);
+
+  const handleFeedbackThumb = useCallback((thumb: "up" | "down") => {
+    setFeedbackThumb(thumb);
+    setShowFeedbackInput(true);
+    setFeedbackSubmitted(false);
+  }, []);
+
+  const handleFeedbackSubmit = useCallback(async (thumbOverride?: "up" | "down") => {
+    const thumb = thumbOverride ?? feedbackThumb;
+    if (!thumb) return;
+    setFeedbackSubmitting(true);
+    try {
+      await fetch("/api/outreach/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entityId: contact.id,
+          thumb,
+          text: feedbackText || undefined,
+        }),
+      });
+      setFeedbackSubmitted(true);
+      setShowFeedbackInput(false);
+    } catch {
+      // Silent fail — feedback is non-critical
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  }, [feedbackThumb, feedbackText, contact.id]);
 
   const fitColors: Record<string, string> = {
     high: "bg-green-100 text-green-700",
@@ -368,6 +404,64 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
             </button>
           </div>
         </div>
+
+        {/* Feedback row */}
+        {!feedbackSubmitted ? (
+          <div className="px-4 md:px-5 pb-3 pt-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-bisque-400">This prospect:</span>
+              <button
+                onClick={() => handleFeedbackThumb("up")}
+                className={`text-base leading-none rounded px-1.5 py-0.5 transition-colors focus:outline-none ${
+                  feedbackThumb === "up"
+                    ? "bg-green-100 text-green-600"
+                    : "text-bisque-400 hover:text-green-500 hover:bg-green-50"
+                }`}
+                aria-label="Thumbs up — good prospect"
+                title="Good prospect"
+              >
+                👍
+              </button>
+              <button
+                onClick={() => handleFeedbackThumb("down")}
+                className={`text-base leading-none rounded px-1.5 py-0.5 transition-colors focus:outline-none ${
+                  feedbackThumb === "down"
+                    ? "bg-red-50 text-red-500"
+                    : "text-bisque-400 hover:text-red-400 hover:bg-red-50"
+                }`}
+                aria-label="Thumbs down — bad prospect"
+                title="Not a good prospect"
+              >
+                👎
+              </button>
+            </div>
+            {showFeedbackInput && feedbackThumb && (
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  type="text"
+                  value={feedbackText}
+                  onChange={(e) => setFeedbackText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleFeedbackSubmit();
+                  }}
+                  placeholder="Optional: tell us why..."
+                  className="flex-1 text-xs border border-bisque-200 rounded px-2 py-1.5 text-bisque-700 placeholder:text-bisque-300 focus:outline-none focus:ring-1 focus:ring-bisque-300"
+                />
+                <button
+                  onClick={() => handleFeedbackSubmit()}
+                  disabled={feedbackSubmitting}
+                  className="px-2 py-1.5 text-xs font-medium rounded bg-bisque-100 text-bisque-700 hover:bg-bisque-200 transition-colors focus:outline-none disabled:opacity-50 whitespace-nowrap"
+                >
+                  {feedbackSubmitting ? "…" : "Submit"}
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="px-4 md:px-5 pb-3 pt-1">
+            <span className="text-xs text-bisque-400">Thanks for the feedback!</span>
+          </div>
+        )}
 
         {/* Expandable message panel */}
         {expanded && (
