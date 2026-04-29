@@ -2,7 +2,7 @@
  * POST /api/outreach/bulk-generate
  *
  * Generate and persist outreach messages for a list of entity IDs.
- * Uses the SAME two-pass Haiku→Opus pipeline as the individual generate-message endpoint.
+ * Uses the same single-Opus generation pipeline as the individual generate-message endpoint.
  * Messages are written to Kissinger as meta fields (outreach_message, etc.)
  * and returned in the response.
  *

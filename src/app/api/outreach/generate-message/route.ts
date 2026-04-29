@@ -3,9 +3,7 @@
  *
  * Generates a personalized LinkedIn outreach message for a prospect contact.
  *
- * Uses a two-pass Claude pipeline:
- *   Pass 1 — Haiku simulates the recipient's mindset (2-3 sentences)
- *   Pass 2 — Opus writes the final message using all contact context + recipient simulation
+ * Uses a single Opus call with full contact context and grounded Eloso product knowledge.
  *
  * If ANTHROPIC_API_KEY is not set, falls back to the template engine.
  *
