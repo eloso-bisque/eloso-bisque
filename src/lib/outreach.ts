@@ -235,20 +235,29 @@ export function generateMessage(task: OutreachTask): GeneratedMessage {
   const ctx = SENDER_CONTEXT[assignee];
   const props = VALUE_PROPS[ctx.angle];
 
-  const firstName = contact.name.split(" ")[0];
-  const companyShort = contact.company.replace(/\s*\(.*?\)\s*/g, "").trim();
+  const firstName = contact.name?.trim().split(" ")[0] || "there";
+  const companyShort = (contact.company || "").replace(/\s*\(.*?\)\s*/g, "").trim();
+  const hasCompany = companyShort.length > 0;
 
-  // Role-aware opener
+  // Role-aware opener — guard against blank company name
   let roleOpener: string;
-  const titleLower = contact.title.toLowerCase();
+  const titleLower = (contact.title || "").toLowerCase();
   if (titleLower.includes("ceo") || titleLower.includes("founder") || titleLower.includes("president")) {
-    roleOpener = `I've been following what ${companyShort} is doing and wanted to reach out directly.`;
+    roleOpener = hasCompany
+      ? `I've been following what ${companyShort} is doing and wanted to reach out directly.`
+      : `I came across your profile and wanted to reach out directly.`;
   } else if (titleLower.includes("cfo") || titleLower.includes("finance")) {
-    roleOpener = `Your vantage point on ${companyShort}'s financials is exactly why I'm reaching out.`;
+    roleOpener = hasCompany
+      ? `Your vantage point on ${companyShort}'s financials is exactly why I'm reaching out.`
+      : `Your finance perspective is exactly why I'm reaching out.`;
   } else if (titleLower.includes("coo") || titleLower.includes("operations")) {
-    roleOpener = `Given what you're managing at ${companyShort}, I think what we're building is directly in your wheelhouse.`;
+    roleOpener = hasCompany
+      ? `Given what you're managing at ${companyShort}, I think what we're building is directly in your wheelhouse.`
+      : `Given what you're managing in operations, I think what we're building is directly in your wheelhouse.`;
   } else {
-    roleOpener = `I've been looking at what ${companyShort} is doing and think there's a real connection to what we're working on.`;
+    roleOpener = hasCompany
+      ? `I've been looking at what ${companyShort} is doing and think there's a real connection to what we're working on.`
+      : `I came across your profile and think there's a real connection to what we're working on.`;
   }
 
   // Sector-aware hook with specific pain point and problem hypothesis
