@@ -105,7 +105,7 @@ function buildClaudePrompt(
   assignee: TeamMember
 ): string {
   const senderContext: Record<TeamMember, string> = {
-    Ben: `Ben Roome — CEO, co-founder. PhD in Ethics of Science and Technology. Background: AI ethics consulting, EdTech startup founder. His voice is CASUAL and direct — like a founder texting a peer, not a salesperson. He writes like he's already in the conversation. No corporate phrasing. Short, punchy, first-person. His angle is "why now" — AI agents are everywhere in supply chains right now and most are making things worse, not better. He reaches out to CEOs, founders, and senior operators as equals.`,
+    Ben: `Ben Roome — CEO, co-founder. His voice is casual, first-person, research-curious — like he's genuinely asking a question, not pitching. He does NOT open with "Hi [name] —" and does NOT introduce himself as "co-founder of Eloso Intelligence." He leads with what he's working on or what he hears from people like the recipient, then asks a specific, genuine question. Example Ben wrote himself: "I'm working on a project to improve demand planning accuracy. I hear from CSCOs that there's a lot of data that they aren't able to collect that could be valuable for this. Quick question: how much planning accuracy gets lost from missing context that lives outside your ERP?" — notice: no formal opener, no company pitch, ends with a real question not a generic CTA.`,
     Jake: `Jake Metcalf — COO, CFO, President. PhD in Ethics of Science and Technology (Sociology of Science). Background: AI policy and accountability research at Data & Society Research Institute; academic work on algorithmic accountability; co-created an AI governance course for procurement professionals. His angle: operational outcomes, governance, ROI. He speaks the language of procurement officers, rail/industrial/defense operations leaders — people who need to justify software investment with hard numbers and who care about organizational accountability.`,
     Drew: `Drew Winget — CTO, the only technical co-founder. His angle: how Eloso works — the agents, why we work around the ERP instead of fighting it, what we connect to, the architecture decisions. He speaks to technically literate CSCOs, engineers in supply chain roles, and anyone who wants to understand the implementation before they buy. He is credible with robotics, machine vision, EV, and enterprise tech contacts.`,
   };
@@ -168,11 +168,17 @@ Before writing the message, reason through:
 4. Which angle from ${assignee}'s background makes this message credible (not generic)?
 
 Then write a LinkedIn DM that:
-- Opens with "Hi ${firstName} —"
+${assignee === "Ben"
+  ? `- Does NOT start with "Hi ${firstName} —" and does NOT introduce Ben as co-founder
+- Opens with what Ben is working on or what he hears from people like the recipient
+- Names ONE specific problem as a genuine research question
+- Ends with a real question specific to the recipient's situation (not a generic "worth 20 min?")
+- Reads like a curious founder asking a peer, not a salesperson`
+  : `- Opens with "Hi ${firstName} —"
 - Identifies ${assignee} as co-founder of Eloso Intelligence (brief)
 - Names ONE specific problem hypothesis for their role and sector — precise, not generic
 - Does NOT explain the solution. An invitation, not a pitch.
-- Ends with a soft CTA: "worth 20 min?" or "relevant to you?" or "does that resonate?"
+- Ends with a soft CTA: "worth 20 min?" or "relevant to you?" or "does that resonate?"`}
 
 HARD CONSTRAINT: Under 280 characters total. Count every character. No exceptions. When in doubt, cut.
 
