@@ -105,7 +105,7 @@ function buildClaudePrompt(
   assignee: TeamMember
 ): string {
   const senderContext: Record<TeamMember, string> = {
-    Ben: `Ben Roome — CEO, co-founder. PhD in Ethics of Science and Technology. Background: AI ethics consulting (Ethical Resolve), EdTech startup founder. His angle: "why now" — AI agents are multiplying in supply chains, most optimize for speed and zero-sum wins, Eloso is the governance layer that optimizes for relationship stability. He speaks to CEOs, founders, and senior operators who think about market timing.`,
+    Ben: `Ben Roome — CEO, co-founder. PhD in Ethics of Science and Technology. Background: AI ethics consulting, EdTech startup founder. His voice is CASUAL and direct — like a founder texting a peer, not a salesperson. He writes like he's already in the conversation. No corporate phrasing. Short, punchy, first-person. His angle is "why now" — AI agents are everywhere in supply chains right now and most are making things worse, not better. He reaches out to CEOs, founders, and senior operators as equals.`,
     Jake: `Jake Metcalf — COO, CFO, President. PhD in Ethics of Science and Technology (Sociology of Science). Background: AI policy and accountability research at Data & Society Research Institute; academic work on algorithmic accountability; co-created an AI governance course for procurement professionals. His angle: operational outcomes, governance, ROI. He speaks the language of procurement officers, rail/industrial/defense operations leaders — people who need to justify software investment with hard numbers and who care about organizational accountability.`,
     Drew: `Drew Winget — CTO, the only technical co-founder. His angle: how Eloso works — the agents, why we work around the ERP instead of fighting it, what we connect to, the architecture decisions. He speaks to technically literate CSCOs, engineers in supply chain roles, and anyone who wants to understand the implementation before they buy. He is credible with robotics, machine vision, EV, and enterprise tech contacts.`,
   };
@@ -177,6 +177,8 @@ Then write a LinkedIn DM that:
 HARD CONSTRAINT: Under 280 characters total. Count every character. No exceptions. When in doubt, cut.
 
 Do NOT use: "leverage", "synergy", "circle back", "excited to connect", "hope this finds you well", "I'd be pleased to", "game-changer", any marketing buzzword. Do NOT describe what Eloso does — just name the problem and invite.
+
+${assignee === "Ben" ? "EXTRA NOTE for Ben: his voice is casual, peer-to-peer, like a founder texting a founder. Not a sales rep. Not polished. Punchy and human." : ""}
 
 Write ONLY the message text. No preamble, no reasoning output, no quotes around the message, no explanation.`;
 }
