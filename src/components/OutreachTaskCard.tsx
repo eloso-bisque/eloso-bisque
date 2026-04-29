@@ -71,10 +71,15 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [personalizing, setPersonalizing] = useState(false);
-  const [displayMessage, setDisplayMessage] = useState<DisplayMessage>({
-    text: message.message,
-    source: "template",
-    angle: message.angle,
+
+  // If a stored outreach_message exists in Kissinger meta, show it immediately
+  // without requiring the user to click "Personalize with AI".
+  const storedMessage = contact.outreachMessage;
+  const [displayMessage, setDisplayMessage] = useState<DisplayMessage>(() => {
+    if (storedMessage) {
+      return { text: storedMessage, source: "claude", angle: message.angle };
+    }
+    return { text: message.message, source: "template", angle: message.angle };
   });
   const [personalizeError, setPersonalizeError] = useState<string | null>(null);
 
@@ -126,7 +131,11 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
       const res = await fetch("/api/outreach/generate-message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contact: task.contact, assignee: task.assignee }),
+        body: JSON.stringify({
+          contact: task.contact,
+          assignee: task.assignee,
+          entityId: task.contact.id,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { message: string; source: MessageSource; angle: "vision" | "technical" | "strategic" };
@@ -280,7 +289,7 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
 
             {/* Desktop action buttons */}
             <div className="hidden md:flex items-center gap-2 shrink-0 flex-wrap justify-end">
-              {claudeEnabled && displayMessage.source === "template" && (
+              {claudeEnabled && (
                 <button
                   onClick={handlePersonalize}
                   disabled={personalizing}
@@ -294,12 +303,14 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
                       </svg>
                       Personalizing…
                     </>
+                  ) : displayMessage.source === "claude" ? (
+                    <>↺ Regenerate</>
                   ) : (
                     <>✦ Personalize with AI</>
                   )}
                 </button>
               )}
-              {displayMessage.source === "claude" && (
+              {displayMessage.source === "claude" && !personalizing && (
                 <span className="px-2 py-1 text-xs font-medium rounded-lg bg-violet-50 border border-violet-200 text-violet-600">
                   ✦ AI-personalized
                 </span>
@@ -362,11 +373,12 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
 
           {/* Mobile action row */}
           <div className="flex md:hidden gap-2 mt-3 flex-wrap">
-            {claudeEnabled && displayMessage.source === "template" && (
+            {claudeEnabled && (
               <button
                 onClick={handlePersonalize}
                 disabled={personalizing}
                 className="flex items-center justify-center gap-1.5 px-3 py-2.5 min-h-[44px] text-sm font-medium rounded-lg bg-violet-50 border border-violet-200 text-violet-700 transition-colors focus:outline-none disabled:opacity-50"
+                aria-label={displayMessage.source === "claude" ? "Regenerate AI message" : "Personalize with AI"}
               >
                 {personalizing ? (
                   <>
@@ -376,6 +388,8 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
                     </svg>
                     …
                   </>
+                ) : displayMessage.source === "claude" ? (
+                  <>↺</>
                 ) : (
                   <>✦</>
                 )}
@@ -565,11 +579,20 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
 
             {/* Provenance note */}
             <p className="text-xs text-bisque-400">
-              Generated {new Date(task.generatedAt).toLocaleDateString("en-US", {
-                month: "short",
-                day: "numeric",
-                year: "numeric",
-              })} · Contact ID: {contact.id.slice(0, 8)}… · Source: {displayMessage.source}
+              {displayMessage.source === "claude" && contact.outreachMessageGeneratedAt ? (
+                <>Stored {new Date(contact.outreachMessageGeneratedAt).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })} · sender: {contact.outreachMessageSender ?? task.assignee.toLowerCase()} · </>
+              ) : (
+                <>Generated {new Date(task.generatedAt).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })} · </>
+              )}
+              Contact ID: {contact.id.slice(0, 8)}… · Source: {displayMessage.source}
             </p>
           </div>
         )}

@@ -31,6 +31,12 @@ export interface ProspectContact {
   outreachStage?: OutreachStage;
   /** LinkedIn profile URL */
   linkedinUrl?: string;
+  /** Previously generated + stored outreach message */
+  outreachMessage?: string;
+  /** ISO timestamp when the stored message was generated */
+  outreachMessageGeneratedAt?: string;
+  /** Sender variant used for the stored message ("drew", "jake", "ben") */
+  outreachMessageSender?: string;
 }
 
 export interface OutreachTask {

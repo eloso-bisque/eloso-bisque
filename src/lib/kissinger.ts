@@ -914,6 +914,12 @@ export interface ProspectContactRaw {
   outreachStage: OutreachStage;
   /** LinkedIn profile URL from meta (linkedin_url or linkedin key) */
   linkedinUrl: string;
+  /** Previously generated + stored outreach message (from meta.outreach_message) */
+  outreachMessage?: string;
+  /** ISO timestamp when the stored message was generated */
+  outreachMessageGeneratedAt?: string;
+  /** Sender variant used for the stored message */
+  outreachMessageSender?: string;
 }
 
 const PROSPECT_CONTACT_QUERY = `
@@ -1053,6 +1059,10 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
 
         const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
 
+        const outreachMessage = meta["outreach_message"] ?? undefined;
+        const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;
+        const outreachMessageSender = meta["outreach_message_sender"] ?? undefined;
+
         return {
           id: person.id,
           name: person.name,
@@ -1064,6 +1074,9 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
           orgId,
           outreachStage,
           linkedinUrl,
+          outreachMessage,
+          outreachMessageGeneratedAt,
+          outreachMessageSender,
         } satisfies ProspectContactRaw;
       })
     );
@@ -1449,6 +1462,51 @@ export const fetchFunnelKanbanData = unstable_cache(
   ["funnel-kanban"],
   { revalidate: 60, tags: ["contacts", "funnel"] }
 );
+
+// ---------------------------------------------------------------------------
+// Outreach message persistence (meta fields on person entities)
+// ---------------------------------------------------------------------------
+
+const UPDATE_ENTITY_META_MUTATION = `
+  mutation UpdateEntityMeta($id: String!, $input: UpdateEntityInput!) {
+    updateEntity(id: $id, input: $input) {
+      id
+      meta { key value }
+    }
+  }
+`;
+
+/**
+ * Merge-update meta fields on an entity.
+ *
+ * Fetches current meta, replaces any keys present in `updates`, and writes
+ * back the full merged list. This is necessary because `updateEntity` replaces
+ * meta entirely rather than patching individual keys.
+ *
+ * Non-blocking: throws on error so callers can decide how to handle it.
+ */
+export async function mergeEntityMeta(
+  entityId: string,
+  updates: Record<string, string>
+): Promise<void> {
+  // Fetch current meta (no-store to avoid stale cache)
+  const detail = await gql<{ entity: { meta: { key: string; value: string }[] } }>(
+    `query E($id: String!) { entity(id: $id) { meta { key value } } }`,
+    { id: entityId },
+    { noStore: true }
+  );
+  const existing = detail.entity.meta ?? [];
+  const updateKeys = new Set(Object.keys(updates));
+  const kept = existing.filter((m) => !updateKeys.has(m.key));
+  const newMeta = [
+    ...kept,
+    ...Object.entries(updates).map(([key, value]) => ({ key, value })),
+  ];
+  await gql(UPDATE_ENTITY_META_MUTATION, {
+    id: entityId,
+    input: { meta: newMeta },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Outreach cadence mutations (BIS-396)

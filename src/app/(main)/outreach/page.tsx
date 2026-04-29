@@ -27,6 +27,9 @@ function mapContact(raw: ProspectContactRaw): ProspectContact {
     notes: raw.notes,
     outreachStage: raw.outreachStage,
     linkedinUrl: raw.linkedinUrl || undefined,
+    outreachMessage: raw.outreachMessage,
+    outreachMessageGeneratedAt: raw.outreachMessageGeneratedAt,
+    outreachMessageSender: raw.outreachMessageSender,
   };
 }
 
