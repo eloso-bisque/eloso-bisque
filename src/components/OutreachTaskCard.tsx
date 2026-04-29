@@ -71,6 +71,10 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [personalizing, setPersonalizing] = useState(false);
+  // Track the timestamp of the most recent in-session generation.
+  // null means no regeneration has happened this session — fall back to the
+  // stored Kissinger value (contact.outreachMessageGeneratedAt).
+  const [localGeneratedAt, setLocalGeneratedAt] = useState<string | null>(null);
 
   // If a stored outreach_message exists in Kissinger meta, show it immediately
   // without requiring the user to click "Personalize with AI".
@@ -140,6 +144,9 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { message: string; source: MessageSource; angle: "vision" | "technical" | "strategic" };
       setDisplayMessage({ text: data.message, source: data.source, angle: data.angle });
+      // Record the actual generation time for this session so the provenance note
+      // does not show the stale stored timestamp from Kissinger.
+      setLocalGeneratedAt(new Date().toISOString());
     } catch {
       setPersonalizeError("Personalization failed — using template.");
     } finally {
@@ -577,14 +584,26 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
               </p>
             </div>
 
-            {/* Provenance note */}
+            {/* Provenance note.
+                Use localGeneratedAt (set on regeneration in this session) in preference
+                to contact.outreachMessageGeneratedAt (the stale stored value from Kissinger).
+                This prevents the timestamp from showing the old generation date after a
+                Regenerate click. */}
             <p className="text-xs text-bisque-400">
-              {displayMessage.source === "claude" && contact.outreachMessageGeneratedAt ? (
-                <>Stored {new Date(contact.outreachMessageGeneratedAt).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })} · sender: {contact.outreachMessageSender ?? task.assignee.toLowerCase()} · </>
+              {displayMessage.source === "claude" ? (
+                (() => {
+                  const ts = localGeneratedAt ?? contact.outreachMessageGeneratedAt;
+                  const label = localGeneratedAt ? "Generated" : "Stored";
+                  return ts ? (
+                    <>{label} {new Date(ts).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })} · sender: {contact.outreachMessageSender ?? task.assignee.toLowerCase()} · </>
+                  ) : (
+                    <>AI-personalized · sender: {contact.outreachMessageSender ?? task.assignee.toLowerCase()} · </>
+                  );
+                })()
               ) : (
                 <>Generated {new Date(task.generatedAt).toLocaleDateString("en-US", {
                   month: "short",

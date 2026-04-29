@@ -1483,6 +1483,16 @@ const UPDATE_ENTITY_META_MUTATION = `
  * back the full merged list. This is necessary because `updateEntity` replaces
  * meta entirely rather than patching individual keys.
  *
+ * IMPORTANT — sent/stage data protection:
+ * This function fetches ALL existing meta before writing. Only the keys
+ * explicitly passed in `updates` are replaced; every other key (including
+ * outreach_stage, outreach_sent_at, outreach_sent_by, funnel_stage, etc.)
+ * is preserved verbatim. Call sites in generate-message/route.ts and
+ * bulk-generate/route.ts pass ONLY the 3 outreach-message fields:
+ *   { outreach_message, outreach_message_generated_at, outreach_message_sender }
+ * They MUST NOT pass outreach_stage or outreach_sent_* — those are managed
+ * exclusively by the outreach-touch and outreach-response mutations.
+ *
  * Non-blocking: throws on error so callers can decide how to handle it.
  */
 export async function mergeEntityMeta(
@@ -1497,6 +1507,8 @@ export async function mergeEntityMeta(
   );
   const existing = detail.entity.meta ?? [];
   const updateKeys = new Set(Object.keys(updates));
+  // Keep ALL keys that are not being explicitly updated — this preserves
+  // outreach_stage, outreach_sent_at, outreach_sent_by, and any other meta.
   const kept = existing.filter((m) => !updateKeys.has(m.key));
   const newMeta = [
     ...kept,
