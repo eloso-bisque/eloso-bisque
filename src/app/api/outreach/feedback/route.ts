@@ -74,6 +74,20 @@ const UPDATE_ENTITY_MUTATION = `
   }
 `;
 
+const CREATE_CONTACT_EVENT_MUTATION = `
+  mutation CreateContactEvent($input: CreateContactEventInput!) {
+    createContactEvent(input: $input) {
+      id
+      entityId
+      eventType
+      summary
+      occurredAt
+      createdBy
+      createdAt
+    }
+  }
+`;
+
 export async function POST(request: NextRequest) {
   // Auth: valid session cookie OR internal secret
   const internalSecret = process.env.LOBSTER_INTERNAL_SECRET;
@@ -154,6 +168,27 @@ export async function POST(request: NextRequest) {
       id: entityId,
       input: { meta: newMeta },
     });
+
+    // Also create a contact event so the full vote history is preserved in the
+    // event log even if meta is later overwritten by a subsequent vote.
+    const eventSummary = text
+      ? `Feedback: thumbs ${thumb} — ${text}`
+      : `Feedback: thumbs ${thumb}`;
+    try {
+      await gqlMutate(CREATE_CONTACT_EVENT_MUTATION, {
+        input: {
+          entityId,
+          eventType: "NOTE",
+          summary: eventSummary,
+          occurredAt: now,
+          createdBy: "bisque-feedback",
+        },
+      });
+    } catch (eventErr) {
+      // Event creation is non-critical — log but don't fail the request.
+      const eventMsg = eventErr instanceof Error ? eventErr.message : String(eventErr);
+      console.warn("[outreach/feedback] Contact event creation failed (non-fatal):", eventMsg);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (err) {
