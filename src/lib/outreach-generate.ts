@@ -57,12 +57,13 @@ We also optimize for different outcomes: relationship stability with suppliers a
 
 ## Message Rules
 
-1. **Under 280 characters total** — count carefully. This is the hardest constraint. Cut everything that is not pulling weight.
-2. **Casual and direct** — contractions, short sentences. No: "I'd be pleased to", "leverage", "synergy", "circle back", "excited to connect", "hope this finds you well".
-3. **Lead with a specific problem** — not "supply chain challenges" but the exact pain for their role and sector. Make them think "how did they know that?"
-4. **Soft CTA** — "worth 20 min?" or "relevant to you?" Never "I'd love to schedule a call at your earliest convenience."
-5. **No COO messages** — COO title is too generic and they're rarely the demand planning champion. Skip them.
-6. **No placeholders** — if a field is unknown, omit the reference entirely. Never leave [Company Name] or similar gaps.`;
+1. **Under 280 characters total** — count every character. This is the hardest constraint. Cut everything that isn't load-bearing.
+2. **Invite, don't pitch** — name the problem, ask if it resonates. Do NOT explain the solution. Do NOT try to convince. The goal is one 20-min conversation, not a sale.
+3. **Casual and direct** — contractions, short sentences. No: "I'd be pleased to", "leverage", "synergy", "circle back", "excited to connect", "hope this finds you well", "game-changer", "excited about".
+4. **Specific problem, not generic pain** — not "supply chain challenges" but the exact thing that keeps this person up at night given their role and sector. Make them think "how did they know that?"
+5. **Soft CTA** — "worth 20 min?" or "relevant to you?" or "does that resonate?" Never "I'd love to schedule a call."
+6. **No COO messages** — too generic, rarely the demand planning champion. Skip them.
+7. **No placeholders** — if a field is unknown, omit the reference entirely. Never leave [Company Name] or a blank.`;
 
 // ---------------------------------------------------------------------------
 // Sector-specific pain maps (used to give Claude reasoning material)
@@ -168,14 +169,14 @@ Before writing the message, reason through:
 
 Then write a LinkedIn DM that:
 - Opens with "Hi ${firstName} —"
-- Identifies ${assignee} as co-founder of Eloso Intelligence
-- States a specific problem hypothesis for this person's role and sector (make them think "how did they know that?")
-- Implicitly or explicitly connects to what Eloso does about it (in 1 sentence max)
-- Ends with a soft CTA: "worth 20 min?" or "relevant to you?" or similar
+- Identifies ${assignee} as co-founder of Eloso Intelligence (brief)
+- Names ONE specific problem hypothesis for their role and sector — precise, not generic
+- Does NOT explain the solution. An invitation, not a pitch.
+- Ends with a soft CTA: "worth 20 min?" or "relevant to you?" or "does that resonate?"
 
-HARD CONSTRAINT: The final message must be under 280 characters total. Count every character. This is strict.
+HARD CONSTRAINT: Under 280 characters total. Count every character. No exceptions. When in doubt, cut.
 
-Do NOT use: "leverage", "synergy", "circle back", "excited to connect", "hope this finds you well", "I'd be pleased to", any buzzword.
+Do NOT use: "leverage", "synergy", "circle back", "excited to connect", "hope this finds you well", "I'd be pleased to", "game-changer", any marketing buzzword. Do NOT describe what Eloso does — just name the problem and invite.
 
 Write ONLY the message text. No preamble, no reasoning output, no quotes around the message, no explanation.`;
 }
