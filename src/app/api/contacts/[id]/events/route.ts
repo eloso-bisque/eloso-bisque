@@ -4,27 +4,42 @@ const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
 const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
 
+// Kissinger uses CreateContactEventInput with entityId + eventType + summary.
+// The eventType enum values are: CALL, EMAIL, MEETING, LINKEDIN_MESSAGE,
+// LINKEDIN_VIEW, NOTE, INTRO, FOLLOW_UP, DEMO, PROPOSAL.
+// We map the legacy frontend "kind" field to the closest enum value.
+const KIND_TO_EVENT_TYPE: Record<string, string> = {
+  Note: "NOTE",
+  Meeting: "MEETING",
+  Email: "EMAIL",
+  Call: "CALL",
+  Custom: "NOTE",
+};
+
 const CREATE_CONTACT_EVENT_MUTATION = `
-  mutation CreateContactEvent($personId: ID!, $kind: ContactEventKind!, $notes: String!, $occurredAt: String!) {
-    createContactEvent(personId: $personId, kind: $kind, notes: $notes, occurredAt: $occurredAt) {
+  mutation CreateContactEvent($input: CreateContactEventInput!) {
+    createContactEvent(input: $input) {
       id
-      personId
-      kind
-      notes
+      entityId
+      eventType
+      summary
       occurredAt
+      createdBy
       createdAt
     }
   }
 `;
 
+// contactEventsForEntity is the correct Kissinger query (not contactEvents).
 const CONTACT_EVENTS_QUERY = `
-  query ContactEvents($personId: ID!) {
-    contactEvents(personId: $personId) {
+  query ContactEventsForEntity($entityId: String!) {
+    contactEventsForEntity(entityId: $entityId) {
       id
-      personId
-      kind
-      notes
+      entityId
+      eventType
+      summary
       occurredAt
+      createdBy
       createdAt
     }
   }
@@ -68,9 +83,23 @@ export async function GET(
 
   try {
     const data = (await gqlRequest(CONTACT_EVENTS_QUERY, {
-      personId: decodeURIComponent(id),
-    })) as { contactEvents: unknown[] };
-    return NextResponse.json({ events: data.contactEvents ?? [] });
+      entityId: decodeURIComponent(id),
+    })) as { contactEventsForEntity: unknown[] };
+    // Normalise to the shape the frontend ContactEventsTab expects:
+    // { id, personId, kind, notes, occurredAt, createdAt }
+    const raw = data.contactEventsForEntity ?? [];
+    const events = (raw as Array<Record<string, unknown>>).map((e) => ({
+      id: e.id,
+      personId: e.entityId,
+      kind: _eventTypeToKind(String(e.eventType ?? "NOTE")),
+      notes: String(e.summary ?? ""),
+      occurredAt: e.occurredAt,
+      createdAt: e.createdAt,
+      // Extra fields for Signals filtering (not used by ContactEventsTab directly)
+      createdBy: e.createdBy,
+      eventType: e.eventType,
+    }));
+    return NextResponse.json({ events });
   } catch (err) {
     console.error("Failed to fetch contact events:", err);
     return NextResponse.json(
@@ -78,6 +107,23 @@ export async function GET(
       { status: 500 }
     );
   }
+}
+
+/** Map Kissinger eventType enum -> ContactEventsTab kind string. */
+function _eventTypeToKind(eventType: string): string {
+  const map: Record<string, string> = {
+    NOTE: "Note",
+    MEETING: "Meeting",
+    EMAIL: "Email",
+    CALL: "Call",
+    INTRO: "Custom",
+    FOLLOW_UP: "Note",
+    DEMO: "Meeting",
+    PROPOSAL: "Custom",
+    LINKEDIN_MESSAGE: "Custom",
+    LINKEDIN_VIEW: "Custom",
+  };
+  return map[eventType] ?? "Custom";
 }
 
 // POST /api/contacts/[id]/events — create a new event
@@ -105,14 +151,28 @@ export async function POST(
     );
   }
 
+  const eventType = KIND_TO_EVENT_TYPE[kind] ?? "NOTE";
+
   try {
     const data = (await gqlRequest(CREATE_CONTACT_EVENT_MUTATION, {
-      personId: decodeURIComponent(id),
-      kind,
-      notes,
-      occurredAt,
-    })) as { createContactEvent: unknown };
-    return NextResponse.json({ event: data.createContactEvent }, { status: 201 });
+      input: {
+        entityId: decodeURIComponent(id),
+        eventType,
+        summary: notes,
+        occurredAt,
+      },
+    })) as { createContactEvent: Record<string, unknown> };
+    // Normalise response to the frontend ContactEvent shape
+    const raw = data.createContactEvent;
+    const event = {
+      id: raw.id,
+      personId: raw.entityId,
+      kind: _eventTypeToKind(String(raw.eventType ?? "NOTE")),
+      notes: String(raw.summary ?? ""),
+      occurredAt: raw.occurredAt,
+      createdAt: raw.createdAt,
+    };
+    return NextResponse.json({ event }, { status: 201 });
   } catch (err) {
     console.error("Failed to create contact event:", err);
     return NextResponse.json(

@@ -3,12 +3,14 @@
 import { useState } from "react";
 import ContactEventsTab from "@/components/ContactEventsTab";
 import IntroPathTab from "@/components/IntroPathTab";
+import TrigifySignalsTab from "@/components/TrigifySignalsTab";
 
-type Tab = "overview" | "events" | "intro-path";
+type Tab = "overview" | "events" | "signals" | "intro-path";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "events", label: "Events" },
+  { id: "signals", label: "Signals" },
   { id: "intro-path", label: "Intro Path" },
 ];
 
@@ -52,6 +54,10 @@ export default function ContactDetailTabs({
 
       {activeTab === "events" && (
         <ContactEventsTab contactId={contactId} />
+      )}
+
+      {activeTab === "signals" && (
+        <TrigifySignalsTab contactId={contactId} />
       )}
 
       {activeTab === "intro-path" && (
