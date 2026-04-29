@@ -61,25 +61,44 @@ export interface GeneratedMessage {
 /**
  * Map from sector tag to preferred assignee.
  * This gives each person a natural angle into their domain:
- * - Ben (founder/vision): leads with defense & frontier tech
- * - Jake (technical/product): leads with enterprise tech & robotics
- * - Drew (strategic/business): leads with industrial & rail
+ *
+ * Ben (CEO, Vision): "why now", market timing, big picture
+ *   → defense, eVTOL/advanced air, emerging/frontier sectors, founder-level contacts
+ *
+ * Drew (CTO, ONLY technical founder): how it works, implementation, integration
+ *   → robotics, machine-vision, enterprise-tech, ev-battery, software-heavy manufacturing
+ *
+ * Jake (COO/CFO/President, PhD Ethics of AI): strategic/business outcomes, governance, ROI
+ *   → rail, heavy equipment, defense/A&D operations, capital goods, industrial
  *
  * Unrecognized sectors fall through to round-robin.
  */
 const SECTOR_PREFERENCE: Record<string, TeamMember> = {
+  // Ben — vision / "why now" / frontier tech
   "defense": "Ben",
   "defense-aerospace": "Ben",
   "evtol": "Ben",
-  "machine-vision": "Jake",
-  "enterprise-tech": "Jake",
-  "robotics": "Jake",
-  "ev-battery": "Jake",
-  "rail-transportation-equipment": "Drew",
-  "building-products-construction": "Drew",
-  "industrial-specialty-manufacturing": "Drew",
-  "fluid-control-water-tech": "Drew",
-  "specialty-chemicals-materials": "Drew",
+  "advanced-air-mobility": "Ben",
+
+  // Drew — technical implementation (ONLY technical founder)
+  "machine-vision": "Drew",
+  "enterprise-tech": "Drew",
+  "robotics": "Drew",
+  "ev-battery": "Drew",
+  "software-manufacturing": "Drew",
+  "semiconductor": "Drew",
+  "medtech": "Drew",
+
+  // Jake — strategic / business outcomes / governance / ROI
+  "rail-transportation-equipment": "Jake",
+  "building-products-construction": "Jake",
+  "industrial-specialty-manufacturing": "Jake",
+  "fluid-control-water-tech": "Jake",
+  "specialty-chemicals-materials": "Jake",
+  "heavy-equipment": "Jake",
+  "capital-goods": "Jake",
+  "contract-manufacturing": "Jake",
+  "aerospace-commercial": "Jake",
 };
 
 /**
@@ -212,11 +231,11 @@ const SENDER_CONTEXT: Record<TeamMember, { angle: "vision" | "technical" | "stra
     intro: "I'm Ben, co-founder of Eloso Intelligence.",
   },
   Jake: {
-    angle: "technical",
+    angle: "strategic",
     intro: "I'm Jake, co-founder of Eloso Intelligence.",
   },
   Drew: {
-    angle: "strategic",
+    angle: "technical",
     intro: "I'm Drew, co-founder of Eloso Intelligence.",
   },
 };
