@@ -1070,7 +1070,7 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
           company,
           sector,
           fitTier,
-          notes: "",
+          notes: detail.entity.notes ?? "",
           orgId,
           outreachStage,
           linkedinUrl,
