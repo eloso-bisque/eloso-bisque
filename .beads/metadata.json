@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "eloso_bisque",
+  "project_id": "da2475e3-00d2-4b9e-92a7-a8acb0f7988b"
+}
