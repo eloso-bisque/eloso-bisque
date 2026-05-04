@@ -50,6 +50,20 @@ bd close <id>         # Complete work
 <!-- END BEADS INTEGRATION -->
 
 
+## beads_viewer (bv)
+
+**bv** is the recommended TUI for visualizing the Beads task graph (PageRank, critical path, Kanban, DAG). Installed at `~/.local/bin/bv`.
+
+**Agent usage — NEVER run bare `bv`** (launches interactive TUI). Use robot flags only:
+
+```bash
+bv --robot-triage   # Full triage: recommended tasks, quick wins, blockers
+bv --robot-next     # Minimal: single top pick + claim command
+bv --robot-help     # Full robot mode help
+```
+
+To export JSONL for bv from beads: `bd export --no-memories -o .beads/beads.jsonl`
+
 ## Build & Test
 
 _Add your build and test commands here_
