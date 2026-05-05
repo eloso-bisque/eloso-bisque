@@ -4,11 +4,18 @@
  * Reloads the "Personalized LinkedIn outreach tasks" list by:
  *   1. Fetching all current prospect-contact-tagged persons
  *   2. Removing "prospect-contact" from those that no longer match criteria
- *   3. Adding "prospect-contact" to eligible candidates up to FILL_TARGET
+ *   3. Adding "prospect-contact" to eligible candidates up to FILL_TARGET,
+ *      prioritising by provenance tier (Tier 1 first, then Tier 2)
  *
- * Eligibility criteria:
- *   - Tagged "linkedin" (direct LinkedIn connection — Ben's import)
- *   - US-based (location field resolves to United States via isUSContact)
+ * Eligibility criteria (provenance tiers):
+ *   Tier 1 — Tagged "source:human" or "source:csv" (manually added / CSV CRM
+ *             imports; personally known contacts — highest trust, surfaces first)
+ *   Tier 2 — Tagged "pipeline-contact" (Apollo enrichment + org chart contacts
+ *             at curated prospect companies — discovered, not personally known)
+ *   AND: US-based (location field resolves to United States via isUSContact)
+ *   AND: not tagged "prospect-skipped"
+ *
+ * Tier 1 contacts are always queued before Tier 2 contacts.
  *
  * The outreach list is not stored separately — it is computed dynamically
  * from the "prospect-contact" tag in Kissinger on every page load.
@@ -26,7 +33,7 @@ import { NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { readFile } from "fs/promises";
 import path from "path";
-import { fetchAllEntities, isUSContact } from "@/lib/kissinger";
+import { fetchAllEntities, isUSContact, type OutreachStage } from "@/lib/kissinger";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -107,6 +114,39 @@ const UPDATE_TAGS_MUTATION = `
   }
 `;
 
+const ENTITY_META_QUERY = `
+  query EntityMeta($id: String!) {
+    entity(id: $id) {
+      id
+      meta { key value }
+    }
+  }
+`;
+
+/** Fetch meta for a single entity. Returns empty array on failure. */
+async function fetchEntityMeta(id: string): Promise<{ key: string; value: string }[]> {
+  try {
+    const data = await gqlMutate<{ entity: { id: string; meta: { key: string; value: string }[] } }>(
+      ENTITY_META_QUERY,
+      { id }
+    );
+    return data.entity?.meta ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Patterns matching COO / Chief Operating Officer titles — mirrored from kissinger.ts EXCLUDED_TITLE_PATTERNS. */
+const COO_TITLE_PATTERNS = [/\bcoo\b/i, /chief operating officer/i, /chief operations officer/i];
+
+function isCOOTitle(title: string | undefined): boolean {
+  if (!title) return false;
+  return COO_TITLE_PATTERNS.some((p) => p.test(title));
+}
+
+/** Valid outreach stages that indicate the contact has been touched (not cold). */
+const NON_COLD_STAGES: OutreachStage[] = ["touched_1", "touched_2", "touched_3", "responded"];
+
 /** Update a person's tags in Kissinger. Replaces the full tags array. */
 async function updateEntityTags(id: string, newTags: string[]): Promise<boolean> {
   try {
@@ -122,24 +162,24 @@ async function updateEntityTags(id: string, newTags: string[]): Promise<boolean>
 }
 
 const COOKIE_NAME = "eloso_session";
-const SESSION_VALUE = "authenticated";
 
 export async function POST(request: Request) {
   // Allow access if EITHER:
   //   1. The request has a valid X-Internal-Secret header (scheduled jobs / Lobster)
-  //   2. The request has a valid browser session cookie (authenticated users)
+  //   2. The request has a browser session cookie (middleware already verified the JWT)
   const internalSecret = process.env.LOBSTER_INTERNAL_SECRET;
   const providedSecret = request.headers.get("X-Internal-Secret");
   const isInternalCall =
     internalSecret && providedSecret && providedSecret === internalSecret;
 
-  // Check session cookie for browser-based access
-  // Next.js Request wraps the Web API Request; cookies are available via headers.
+  // The middleware validates the JWT and only lets requests through if authenticated.
+  // We just need to confirm the session cookie is present — its validity is guaranteed
+  // by the time any request reaches this handler.
   const cookieHeader = request.headers.get("cookie") ?? "";
   const hasSessionCookie = cookieHeader
     .split(";")
     .map((c) => c.trim())
-    .some((c) => c === `${COOKIE_NAME}=${SESSION_VALUE}`);
+    .some((c) => c.startsWith(`${COOKIE_NAME}=`));
 
   if (!isInternalCall && !hasSessionCookie) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -158,19 +198,66 @@ export async function POST(request: Request) {
     const currentOutreach = allPeople.filter((p) => p.tags.includes("prospect-contact"));
     const nonOutreach = allPeople.filter((p) => !p.tags.includes("prospect-contact"));
 
-    // Determine which current outreach contacts still qualify
-    const stillQualify = currentOutreach.filter(
-      (p) => p.tags.includes("linkedin") && isUSContact(p)
-    );
-    const noLongerQualify = currentOutreach.filter(
-      (p) => !(p.tags.includes("linkedin") && isUSContact(p))
+    // Fetch entity meta for all current outreach contacts so we can check
+    // outreach_stage and title. This lets us free up slots occupied by:
+    //   (a) contacts already touched/responded (non-cold stage) — these will
+    //       never appear in the Active queue anyway, so they waste slots
+    //   (b) COO-titled contacts — fetchProspectContacts always excludes them
+    //       via isTitleExcluded(), so they permanently waste outreach slots
+    const outreachMetaList = await Promise.all(
+      currentOutreach.map(async (p) => ({ person: p, meta: await fetchEntityMeta(p.id) }))
     );
 
-    // Determine eligible candidates to add (linkedin + US, not already prospect-contact,
-    // and not previously skipped via the "prospect-skipped" tag)
-    let candidates = nonOutreach.filter(
-      (p) => p.tags.includes("linkedin") && isUSContact(p) && !p.tags.includes("prospect-skipped")
-    );
+    // Helper: returns true if a person qualifies by provenance tier.
+    //   Tier 1 — source:human or source:csv
+    //   Tier 2 — pipeline-contact
+    // AND: US-based AND not tagged prospect-skipped
+    const isProvenanceEligible = (person: (typeof allPeople)[number]): boolean => {
+      const isTier1 = person.tags.includes("source:human") || person.tags.includes("source:csv");
+      const isTier2 = person.tags.includes("pipeline-contact");
+      return (isTier1 || isTier2) && isUSContact(person) && !person.tags.includes("prospect-skipped");
+    };
+
+    // Determine which current outreach contacts still qualify for the Active queue:
+    //   - Provenance eligible (source:human / source:csv / pipeline-contact) AND US-based
+    //   - Has outreach_stage == "cold" or not set (not yet touched)
+    //   - Does NOT have a COO title (isTitleExcluded would drop them from the page anyway)
+    const stillQualify = outreachMetaList
+      .filter(({ person, meta }) => {
+        if (!isProvenanceEligible(person)) return false;
+        const stageMeta = meta.find((m) => m.key === "outreach_stage")?.value ?? "cold";
+        const isTouched = (NON_COLD_STAGES as string[]).includes(stageMeta);
+        if (isTouched) return false;
+        const title = meta.find((m) => m.key === "title")?.value ?? "";
+        if (isCOOTitle(title)) return false;
+        return true;
+      })
+      .map(({ person }) => person);
+
+    const noLongerQualify = outreachMetaList
+      .filter(({ person, meta }) => {
+        if (!isProvenanceEligible(person)) return true;
+        const stageMeta = meta.find((m) => m.key === "outreach_stage")?.value ?? "cold";
+        if ((NON_COLD_STAGES as string[]).includes(stageMeta)) return true;
+        const title = meta.find((m) => m.key === "title")?.value ?? "";
+        if (isCOOTitle(title)) return true;
+        return false;
+      })
+      .map(({ person }) => person);
+
+    // Determine eligible candidates to add:
+    //   - Provenance eligible: source:human / source:csv (Tier 1) or pipeline-contact (Tier 2)
+    //   - US-based AND not tagged prospect-skipped
+    //   - Not already in the outreach queue
+    let candidates = nonOutreach.filter(isProvenanceEligible);
+
+    // Sort by provenance tier first: Tier 1 (source:human / source:csv) before Tier 2 (pipeline-contact).
+    // Within the same tier, order is stable (insertion order from Kissinger).
+    candidates.sort((a, b) => {
+      const aTier1 = a.tags.includes("source:human") || a.tags.includes("source:csv") ? 0 : 1;
+      const bTier1 = b.tags.includes("source:human") || b.tags.includes("source:csv") ? 0 : 1;
+      return aTier1 - bTier1;
+    });
 
     // Apply prospect criteria filtering/prioritization if available
     if (criteria) {
