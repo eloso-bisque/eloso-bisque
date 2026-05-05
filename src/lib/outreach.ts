@@ -37,6 +37,15 @@ export interface ProspectContact {
   outreachMessageGeneratedAt?: string;
   /** Sender variant used for the stored message ("drew", "jake", "ben") */
   outreachMessageSender?: string;
+  /** Signal fields from Kissinger entity meta (populated by Trigify daily sync) */
+  lastSignalDate?: string;
+  signalDismissed?: boolean;
+  signalSnoozedUntil?: string;
+  lastSignalKeyword?: string;
+  /** URL of the specific LinkedIn post that triggered the signal */
+  lastSignalUrl?: string;
+  /** True if the contact has a warm intro path (from kissinger introPath query) */
+  hasIntroPath?: boolean;
 }
 
 export interface OutreachTask {
@@ -131,11 +140,17 @@ export function assignContact(
  * appear in more than one bucket. This is a strict partition.
  *
  * Assignment priority:
- * 1. Sector affinity (first matching tag in SECTOR_PREFERENCE wins)
- * 2. Round-robin across team members (fallback for unclassified contacts)
+ * 1. Explicit sender: if outreachMessageSender is already set (case-insensitive),
+ *    honour it — the contact was previously claimed by that team member.
+ * 2. Sector affinity (first matching tag in SECTOR_PREFERENCE wins)
+ * 3. Round-robin across team members (fallback for unclassified contacts)
  *
- * The round-robin fallback counter increments only for unclassified contacts,
- * ensuring even distribution regardless of how many contacts have sector tags.
+ * Honouring the explicit sender means that contacts added by the queue
+ * replenishment job (which sets no sender) are evenly distributed via
+ * round-robin, while contacts already in someone's pipeline stay there.
+ *
+ * The round-robin fallback counter increments only for contacts with no
+ * explicit sender and no sector preference match, ensuring even distribution.
  *
  * Returns a map from TeamMember → OutreachTask[].
  */
@@ -146,14 +161,35 @@ export function distributeContacts(contacts: ProspectContact[]): Record<TeamMemb
     Drew: [],
   };
 
-  // Separate fallback counter — only increments for contacts with no sector
-  // preference match, ensuring true round-robin across unclassified contacts.
+  // Separate fallback counter — only increments for contacts with no explicit
+  // sender and no sector preference match, ensuring true round-robin across
+  // the unassigned pool.
   let fallbackCounter = 0;
 
   const now = new Date().toISOString();
 
+  // Build a case-insensitive lookup for TEAM_MEMBERS
+  const memberByLower: Record<string, TeamMember> = {};
+  for (const m of TEAM_MEMBERS) {
+    memberByLower[m.toLowerCase()] = m;
+  }
+
   for (const contact of contacts) {
-    // Determine if this contact has a sector-preference match
+    // Priority 1: respect an explicit sender already stored on the contact.
+    // This ensures contacts previously claimed by a team member stay in their queue.
+    const explicitSender = contact.outreachMessageSender?.toLowerCase();
+    const explicitAssignee = explicitSender ? memberByLower[explicitSender] : undefined;
+    if (explicitAssignee) {
+      result[explicitAssignee].push({
+        id: `${contact.id}-${explicitAssignee}`,
+        contact,
+        assignee: explicitAssignee,
+        generatedAt: now,
+      });
+      continue;
+    }
+
+    // Priority 2: sector affinity
     let sectorAssignee: TeamMember | null = null;
     for (const tag of contact.sector) {
       const pref = SECTOR_PREFERENCE[tag];
@@ -167,6 +203,7 @@ export function distributeContacts(contacts: ProspectContact[]): Record<TeamMemb
     if (sectorAssignee !== null) {
       assignee = sectorAssignee;
     } else {
+      // Priority 3: round-robin across unassigned/unclassified contacts
       assignee = TEAM_MEMBERS[fallbackCounter % TEAM_MEMBERS.length];
       fallbackCounter += 1;
     }
@@ -307,4 +344,69 @@ export function generateMessage(task: OutreachTask): GeneratedMessage {
     message,
     angle: ctx.angle,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Signal scoring utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the number of days elapsed since a date string (ISO), or Infinity if
+ * null/undefined/unparseable.
+ */
+export function daysSince(dateStr: string | undefined | null): number {
+  if (!dateStr) return Infinity;
+  const ts = Date.parse(dateStr);
+  if (isNaN(ts)) return Infinity;
+  return (Date.now() - ts) / (1000 * 60 * 60 * 24);
+}
+
+/**
+ * Returns true if the contact has a LinkedIn signal within the last 3 days.
+ */
+export function isHotSignal(contact: Pick<ProspectContact, "lastSignalDate">): boolean {
+  return daysSince(contact.lastSignalDate) <= 3;
+}
+
+/**
+ * Returns true if the contact has a LinkedIn signal within the last 14 days.
+ */
+export function isWarmSignal(contact: Pick<ProspectContact, "lastSignalDate">): boolean {
+  return daysSince(contact.lastSignalDate) <= 14;
+}
+
+/**
+ * Returns true if the contact's signal snooze period has not yet expired.
+ */
+export function isSignalSnoozed(contact: Pick<ProspectContact, "signalSnoozedUntil">): boolean {
+  if (!contact.signalSnoozedUntil) return false;
+  return new Date(contact.signalSnoozedUntil) > new Date();
+}
+
+/** Returns true if the title suggests a senior/executive role. */
+function isSenior(title: string): boolean {
+  const t = title.toLowerCase();
+  return ["ceo", "cto", "cfo", "coo", "president", "founder", "vp", "vice president", "director", "head of"].some(
+    (s) => t.includes(s)
+  );
+}
+
+/**
+ * Compute a priority score for a contact in the Signals tab.
+ * Higher score = more urgent to reach out.
+ *
+ * Formula:
+ *   recency (0–100) + fit tier (5/15/30) + intro path bonus (15) + seniority (10)
+ */
+export function computeSignalScore(contact: ProspectContact): number {
+  const ageDays = daysSince(contact.lastSignalDate);
+  const recency =
+    ageDays <= 1 ? 100 :
+    ageDays <= 3 ? 80 :
+    ageDays <= 7 ? 60 :
+    ageDays <= 14 ? 40 : 0;
+  const fit = contact.fitTier === "high" ? 30 : contact.fitTier === "medium" ? 15 : 5;
+  const hasIntroPath = contact.hasIntroPath ? 15 : 0;
+  const senior = isSenior(contact.title ?? "") ? 10 : 0;
+  return recency + fit + hasIntroPath + senior;
 }
