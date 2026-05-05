@@ -1039,7 +1039,7 @@ async function _fetchProspectContacts(): Promise<ProspectContactRaw[] | null> {
         }
 
         const title = meta["title"] ?? nestedMeta["title"] ?? "";
-        const company = meta["company"] ?? nestedMeta["org"] ?? "";
+        const company = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
 
         // Find the linked org via works_at edge
         const worksAtEdge = edgesData.edgesFrom.edges
@@ -1203,7 +1203,7 @@ async function _fetchSentContacts(): Promise<ProspectContactRaw[]> {
         }
 
         const title = meta["title"] ?? nestedMeta["title"] ?? "";
-        const company = meta["company"] ?? nestedMeta["org"] ?? "";
+        const company = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
         const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
 
         const outreachStageMeta = meta["outreach_stage"] ?? "cold";

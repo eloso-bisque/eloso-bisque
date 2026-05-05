@@ -1,8 +1,18 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import type { OutreachTask, GeneratedMessage, OutreachStage } from "@/lib/outreach";
+import { isHotSignal, isWarmSignal, daysSince } from "@/lib/outreach";
 import ResponseDrawer from "./ResponseDrawer";
+
+function relativeSignalDate(dateStr: string): string {
+  const days = Math.floor(daysSince(dateStr));
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+}
 
 interface OutreachTaskCardProps {
   task: OutreachTask;
@@ -63,6 +73,7 @@ function StageBadge({ stage }: { stage: OutreachStage }) {
 
 export default function OutreachTaskCard({ task, message, claudeEnabled = false }: OutreachTaskCardProps) {
   const { contact } = task;
+  const router = useRouter();
 
   // Stage state — initialized from contact, can be updated optimistically
   const initialStage: OutreachStage = contact.outreachStage ?? "cold";
@@ -170,12 +181,14 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
       }
       const data = (await res.json()) as { newStage: OutreachStage };
       setStage(data.newStage);
+      // Refresh server data so the contact moves to the Sent tab on next render
+      router.refresh();
     } catch (err) {
       setTouchError(err instanceof Error ? err.message : "Failed to mark sent");
     } finally {
       setMarkingTouch(false);
     }
-  }, [contact.id, touchNumber]);
+  }, [contact.id, touchNumber, router]);
 
   const handleSkip = useCallback(async () => {
     setSkipping(true);
@@ -190,12 +203,14 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
         throw new Error(data.error ?? `HTTP ${res.status}`);
       }
       setSkipped(true);
+      // Refresh server data so the skipped contact disappears on next render
+      router.refresh();
     } catch (err) {
       setTouchError(err instanceof Error ? err.message : "Failed to skip");
     } finally {
       setSkipping(false);
     }
-  }, [contact.id]);
+  }, [contact.id, router]);
 
   const handleResponseSuccess = useCallback((responseType: string) => {
     setDrawerOpen(false);
@@ -275,11 +290,31 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
                 </span>
                 {/* Outreach stage badge */}
                 <StageBadge stage={stage} />
+                {/* LinkedIn profile button */}
+                {contact.linkedinUrl && (
+                  <a
+                    href={contact.linkedinUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open LinkedIn profile"
+                    aria-label="Open LinkedIn profile"
+                    className="inline-flex items-center justify-center w-6 h-6 rounded hover:opacity-80 transition-opacity shrink-0"
+                  >
+                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="24" height="24" rx="4" fill="#0A66C2" />
+                      <path d="M7.5 9.5H5V19H7.5V9.5Z" fill="white" />
+                      <circle cx="6.25" cy="6.75" r="1.5" fill="white" />
+                      <path d="M19 19H16.5V14.25C16.5 13.0074 15.4926 12 14.25 12C13.0074 12 12 13.0074 12 14.25V19H9.5V9.5H12V10.9272C12.6671 10.0313 13.7712 9.5 15 9.5C17.2091 9.5 19 11.2909 19 13.5V19Z" fill="white" />
+                    </svg>
+                  </a>
+                )}
               </div>
-              <p className="text-sm text-bisque-600 mt-0.5">
-                {contact.title}
-                {contact.company ? ` · ${contact.company}` : ""}
-              </p>
+              {contact.title && (
+                <p className="text-sm text-bisque-600 mt-0.5">{contact.title}</p>
+              )}
+              {contact.company && (
+                <p className="text-sm text-bisque-500 mt-0">{contact.company}</p>
+              )}
               {contact.sector.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-2">
                   {contact.sector.map((s) => (
@@ -290,6 +325,20 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
                       {s}
                     </span>
                   ))}
+                </div>
+              )}
+              {contact.lastSignalDate && isWarmSignal(contact) && (
+                <div className="mt-2">
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border font-medium ${
+                      isHotSignal(contact)
+                        ? "bg-amber-100 text-amber-700 border-amber-200"
+                        : "bg-green-50 text-green-700 border-green-200"
+                    }`}
+                  >
+                    ⚡ Signalled {relativeSignalDate(contact.lastSignalDate)}
+                    {contact.lastSignalKeyword && ` · "${contact.lastSignalKeyword}"`}
+                  </span>
                 </div>
               )}
             </div>
