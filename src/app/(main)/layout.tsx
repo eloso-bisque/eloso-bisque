@@ -1,4 +1,5 @@
 import MobileNav from "@/components/MobileNav";
+import LogoutButton from "@/components/LogoutButton";
 
 export default function MainLayout({
   children,
@@ -29,7 +30,11 @@ export default function MainLayout({
           <a href="/sectors" className="hover:text-bisque-200 transition-colors">
             Sectors
           </a>
+          <a href="/admin/activity" className="hover:text-bisque-200 transition-colors">
+            Activity
+          </a>
         </nav>
+        <LogoutButton />
       </header>
 
       {/* Mobile top bar — wordmark only, shown on mobile */}

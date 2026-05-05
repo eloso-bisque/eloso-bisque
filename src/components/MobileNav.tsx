@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 const NAV_ITEMS = [
   {
@@ -132,10 +132,17 @@ const NAV_ITEMS = [
 
 export default function MobileNav() {
   const pathname = usePathname();
+  const router = useRouter();
 
   function isActive(href: string): boolean {
     if (href === "/") return pathname === "/";
     return pathname.startsWith(href);
+  }
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+    router.refresh();
   }
 
   return (
@@ -171,6 +178,24 @@ export default function MobileNav() {
             </Link>
           );
         })}
+        {/* Sign out */}
+        <button
+          onClick={handleLogout}
+          className="flex-1 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] text-bisque-400 hover:text-bisque-600 transition-colors"
+          aria-label="Sign out"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="w-6 h-6"
+            aria-hidden="true"
+          >
+            <path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          <span className="text-[10px] font-medium leading-none">Sign out</span>
+        </button>
       </div>
     </nav>
   );
