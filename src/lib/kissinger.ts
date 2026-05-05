@@ -890,6 +890,18 @@ export async function searchKissinger(
 }
 
 // ---------------------------------------------------------------------------
+// COO / Chief Operating Officer title exclusion (permanent filter)
+// Applied in fetchProspectContacts and fetchSignalContacts before returning results.
+// ---------------------------------------------------------------------------
+
+const EXCLUDED_TITLE_PATTERNS = [/\bcoo\b/i, /chief operating officer/i, /chief operations officer/i];
+
+function isTitleExcluded(title: string | undefined): boolean {
+  if (!title) return false;
+  return EXCLUDED_TITLE_PATTERNS.some((p) => p.test(title));
+}
+
+// ---------------------------------------------------------------------------
 // Outreach: fetch prospect contacts with org context
 // ---------------------------------------------------------------------------
 
@@ -920,6 +932,16 @@ export interface ProspectContactRaw {
   outreachMessageGeneratedAt?: string;
   /** Sender variant used for the stored message */
   outreachMessageSender?: string;
+  /** ISO datetime of the most recent Trigify signal (from meta.last_signal_date) */
+  lastSignalDate?: string;
+  /** True if the rep has dismissed this signal as irrelevant (meta.signal_dismissed) */
+  signalDismissed?: boolean;
+  /** ISO datetime until which this signal is snoozed (meta.signal_snoozed_until) */
+  signalSnoozedUntil?: string;
+  /** Keyword from the most recent Trigify signal (meta.last_signal_keyword) */
+  lastSignalKeyword?: string;
+  /** URL of the specific LinkedIn post that triggered the signal (meta.last_signal_url) */
+  lastSignalUrl?: string;
 }
 
 const PROSPECT_CONTACT_QUERY = `
@@ -958,7 +980,7 @@ const EDGES_FROM_PERSON_QUERY = `
  *
  * Returns null if Kissinger is unreachable.
  */
-export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | null> {
+async function _fetchProspectContacts(): Promise<ProspectContactRaw[] | null> {
   try {
     // Fetch all person entities in pages (Kissinger has 7k+ people)
     // We only need those tagged "prospect-contact"
@@ -974,7 +996,7 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
           pageInfo: { hasNextPage: boolean; endCursor: string | null };
           edges: { node: { id: string; name: string; tags: string[] } }[];
         };
-      }>(PROSPECT_CONTACT_QUERY, { first: PAGE, after: cursor });
+      }>(PROSPECT_CONTACT_QUERY, { first: PAGE, after: cursor }, { tags: ["contacts"] });
 
       const raw = data.entities;
       const filtered = raw.edges
@@ -1063,6 +1085,13 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
         const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;
         const outreachMessageSender = meta["outreach_message_sender"] ?? undefined;
 
+        // Signal fields (written by trigify daily sync)
+        const lastSignalDate = meta["last_signal_date"] ?? undefined;
+        const signalDismissed = meta["signal_dismissed"] === "true";
+        const signalSnoozedUntil = meta["signal_snoozed_until"] ?? undefined;
+        const lastSignalKeyword = meta["last_signal_keyword"] ?? undefined;
+        const lastSignalUrl = meta["last_signal_url"] ?? undefined;
+
         return {
           id: person.id,
           name: person.name,
@@ -1072,6 +1101,130 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
           fitTier,
           notes: detail.entity.notes ?? "",
           orgId,
+          outreachStage,
+          linkedinUrl,
+          outreachMessage,
+          outreachMessageGeneratedAt,
+          outreachMessageSender,
+          lastSignalDate,
+          signalDismissed,
+          signalSnoozedUntil,
+          lastSignalKeyword,
+          lastSignalUrl,
+        } satisfies ProspectContactRaw;
+      })
+    );
+
+    const results: ProspectContactRaw[] = [];
+    for (const r of enriched) {
+      if (r.status === "fulfilled") {
+        // Permanently exclude COO / Chief Operating Officer titles as a safety net
+        // (these should be cleaned up by reload-tasks / bulk cleanup, but filter
+        // here defensively in case any slip through)
+        if (!isTitleExcluded(r.value.title)) {
+          results.push(r.value);
+        }
+      }
+    }
+    return results;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cached version of _fetchProspectContacts.
+ * TTL: 60 seconds. Tag: "contacts" — call revalidateTag("contacts") after mutations.
+ *
+ * Wrapping with unstable_cache means the expensive multi-page scan + N*3 detail/edges/org
+ * fetches only run once per 60-second window rather than on every page request.
+ */
+export const fetchProspectContacts = unstable_cache(
+  _fetchProspectContacts,
+  ["prospect-contacts"],
+  { revalidate: 60, tags: ["contacts"] }
+);
+
+// ---------------------------------------------------------------------------
+// Sent contacts query — for the Sent tab
+// Fetches person entities tagged "outreach-sent".
+// These are contacts that have been touched or responded to. They no longer
+// have "prospect-contact" tag — the tag was removed when they were sent.
+// ---------------------------------------------------------------------------
+
+async function _fetchSentContacts(): Promise<ProspectContactRaw[]> {
+  try {
+    const PAGE = 500;
+    const sentPersons: { id: string; name: string; tags: string[] }[] = [];
+    let cursor: string | undefined;
+    let safety = 0;
+
+    while (safety < 30) {
+      safety++;
+      const data = await gql<{
+        entities: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          edges: { node: { id: string; name: string; tags: string[] } }[];
+        };
+      }>(PROSPECT_CONTACT_QUERY, { first: PAGE, after: cursor }, { tags: ["contacts"] });
+
+      const raw = data.entities;
+      const filtered = raw.edges
+        .map((e) => e.node)
+        .filter((n) => n.tags.includes("outreach-sent"));
+      sentPersons.push(...filtered);
+
+      if (!raw.pageInfo.hasNextPage || !raw.pageInfo.endCursor) break;
+      cursor = raw.pageInfo.endCursor;
+    }
+
+    if (sentPersons.length === 0) return [];
+
+    // Enrich each sent person with their meta (title, stage, linkedin, sender)
+    const enriched = await Promise.allSettled(
+      sentPersons.map(async (person) => {
+        const detail = await gql<{ entity: ContactDetail }>(
+          ENTITY_DETAIL_QUERY,
+          { id: person.id },
+          { tags: ["contacts"] }
+        );
+
+        const meta = Object.fromEntries(
+          detail.entity.meta.map((m) => [m.key, m.value])
+        );
+
+        let nestedMeta: Record<string, string> = {};
+        if (meta["meta"]) {
+          try {
+            nestedMeta = JSON.parse(meta["meta"]) as Record<string, string>;
+          } catch {
+            // not JSON — ignore
+          }
+        }
+
+        const title = meta["title"] ?? nestedMeta["title"] ?? "";
+        const company = meta["company"] ?? nestedMeta["org"] ?? "";
+        const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+
+        const outreachStageMeta = meta["outreach_stage"] ?? "cold";
+        const validStages: OutreachStage[] = ["cold", "touched_1", "touched_2", "touched_3", "responded"];
+        const outreachStage: OutreachStage = validStages.includes(outreachStageMeta as OutreachStage)
+          ? (outreachStageMeta as OutreachStage)
+          : "cold";
+
+        const outreachMessage = meta["outreach_message"] ?? undefined;
+        const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;
+        const outreachMessageSender = meta["outreach_message_sender"] ?? undefined;
+
+        return {
+          id: person.id,
+          name: person.name,
+          title,
+          company,
+          sector: [],
+          fitTier: "high" as const,
+          notes: detail.entity.notes ?? "",
+          orgId: undefined,
           outreachStage,
           linkedinUrl,
           outreachMessage,
@@ -1089,9 +1242,189 @@ export async function fetchProspectContacts(): Promise<ProspectContactRaw[] | nu
     }
     return results;
   } catch {
-    return null;
+    return [];
   }
 }
+
+/**
+ * Fetch all sent contacts (tagged "outreach-sent").
+ * These have been touched at least once and are no longer in the prospect-contact pool.
+ * TTL: 60 seconds. Tag: "contacts".
+ */
+export const fetchSentContacts = unstable_cache(
+  _fetchSentContacts,
+  ["sent-contacts"],
+  { revalidate: 60, tags: ["contacts"] }
+);
+
+// ---------------------------------------------------------------------------
+// Signal contacts query — for the Signals tab
+// Fetches person entities tagged "signal:post-engagement" that have
+// last_signal_date set within the last 14 days.
+// These are distinct from "prospect-contact" entities (Apollo imports).
+// Trigify signals write to entities tagged "prospect" or "trigify-discovered",
+// never "prospect-contact", so fetchProspectContacts() misses them entirely.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch all person entities with recent Trigify signals.
+ * These are entities tagged "signal:post-engagement" with last_signal_date
+ * set within the last 14 days.
+ *
+ * Returns empty array if Kissinger is unreachable.
+ */
+/**
+ * Split an array into chunks of the given size.
+ */
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+/**
+ * Maximum number of signal contacts to surface per page load.
+ * Signals are sorted newest-first and capped here to avoid N+1 detail fetches
+ * for 500+ entities on every cache miss.
+ */
+const SIGNAL_DISPLAY_LIMIT = 50;
+
+async function _fetchSignalContacts(): Promise<ProspectContactRaw[]> {
+  try {
+    const PAGE = 500;
+    const signalPersonIds: { id: string; name: string; tags: string[] }[] = [];
+    let cursor: string | undefined;
+    let safety = 0;
+
+    // Scan all person entities to collect those tagged "signal:post-engagement".
+    // Use a short cache TTL (60 s) — the noStore flag was forcing a full re-scan of
+    // 7 k+ entities on every single page request, which caused the majority of the
+    // slowdown.  A 60-second cache is fresh enough for this use case.
+    while (safety < 30) {
+      safety++;
+      const data = await gql<{
+        entities: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          edges: { node: { id: string; name: string; tags: string[] } }[];
+        };
+      }>(PROSPECT_CONTACT_QUERY, { first: PAGE, after: cursor }, { tags: ["contacts"], revalidate: 60 });
+
+      const raw = data.entities;
+      const filtered = raw.edges
+        .map((e) => e.node)
+        .filter((n) => n.tags.includes("signal:post-engagement"));
+      signalPersonIds.push(...filtered);
+
+      if (!raw.pageInfo.hasNextPage || !raw.pageInfo.endCursor) break;
+      cursor = raw.pageInfo.endCursor;
+    }
+
+    if (signalPersonIds.length === 0) return [];
+
+    // Cap to SIGNAL_DISPLAY_LIMIT before fetching details to avoid N+1 explosion.
+    // We take the last N IDs in cursor order (most recently updated) as a proxy
+    // for "most recent signals" before we have per-entity date metadata.
+    const topSignalIds = signalPersonIds.slice(-SIGNAL_DISPLAY_LIMIT);
+
+    // Batch detail fetches: 10 at a time to avoid overwhelming Kissinger.
+    // This reduces max concurrent requests from 500+ down to 10.
+    const now = Date.now();
+    const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+
+    const allDetails: Array<{ person: { id: string; name: string }; detail: ContactDetail } | null> = [];
+    for (const chunk of chunkArray(topSignalIds, 10)) {
+      const chunkResults = await Promise.allSettled(
+        chunk.map(async (person) => {
+          const detail = await gql<{ entity: ContactDetail }>(
+            ENTITY_DETAIL_QUERY,
+            { id: person.id },
+            { tags: ["contacts"], revalidate: 60 }
+          );
+          return detail.entity ? { person, detail: detail.entity } : null;
+        })
+      );
+      for (const r of chunkResults) {
+        allDetails.push(r.status === "fulfilled" ? r.value : null);
+      }
+    }
+
+    const results: ProspectContactRaw[] = [];
+    for (const item of allDetails) {
+      if (!item) continue;
+      const { person, detail } = item;
+
+      const meta = Object.fromEntries(detail.meta.map((m) => [m.key, m.value]));
+
+      const lastSignalDate = meta["last_signal_date"] ?? undefined;
+
+      // Filter: only include signals within 14 days
+      if (!lastSignalDate) continue;
+      const signalTs = Date.parse(lastSignalDate);
+      if (isNaN(signalTs) || now - signalTs > FOURTEEN_DAYS_MS) continue;
+
+      // Extract available fields (Trigify entities may have title/company/linkedin)
+      let nestedMeta: Record<string, string> = {};
+      if (meta["meta"]) {
+        try {
+          nestedMeta = JSON.parse(meta["meta"]) as Record<string, string>;
+        } catch {
+          // not JSON — ignore
+        }
+      }
+
+      const title = meta["title"] ?? nestedMeta["title"] ?? "";
+      const company = meta["company"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
+      const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+
+      const signalDismissed = meta["signal_dismissed"] === "true";
+      const signalSnoozedUntil = meta["signal_snoozed_until"] ?? undefined;
+      const lastSignalKeyword = meta["last_signal_keyword"] ?? undefined;
+      const lastSignalUrl = meta["last_signal_url"] ?? undefined;
+
+      // Permanently exclude COO / Chief Operating Officer titles
+      if (isTitleExcluded(title)) continue;
+
+      results.push({
+        id: person.id,
+        name: person.name,
+        title,
+        company,
+        sector: [],
+        fitTier: "high" as const,
+        notes: detail.notes ?? "",
+        orgId: undefined,
+        outreachStage: "cold" as const,
+        linkedinUrl,
+        lastSignalDate,
+        signalDismissed,
+        signalSnoozedUntil,
+        lastSignalKeyword,
+        lastSignalUrl,
+      } satisfies ProspectContactRaw);
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch all person entities with recent Trigify signals.
+ * These are entities tagged "signal:post-engagement" with last_signal_date
+ * set within the last 14 days.
+ *
+ * Returns empty array if Kissinger is unreachable.
+ *
+ * Performance: capped at SIGNAL_DISPLAY_LIMIT=50 detail fetches, batched 10-at-a-time.
+ * TTL: 60 seconds. Tag: "contacts".
+ */
+export const fetchSignalContacts = unstable_cache(
+  _fetchSignalContacts,
+  ["signal-contacts"],
+  { revalidate: 60, tags: ["contacts"] }
+);
 
 // ---------------------------------------------------------------------------
 // Investor-specific types and queries (BIS-325–333)
