@@ -81,16 +81,20 @@ async function OutreachContent({ currentMember }: { currentMember: TeamMember | 
     });
 
   // Sent contacts come from the outreach-sent tag (disjoint from prospect-contact).
-  // Scope to the logged-in user: only show contacts where outreachMessageSender
-  // matches the current user (case-insensitive).
+  // Scope to the logged-in user: show contacts where outreachMessageSender matches
+  // the current user (case-insensitive), plus any contacts with no sender recorded
+  // (contacts marked sent before sender attribution was added, or marked sent without
+  // going through the generate-message flow). Unattributed contacts are shown to all
+  // users since we cannot determine who sent them.
   const allSentMapped: ProspectContact[] = rawSentContacts.map(mapContact);
   const sentContacts: ProspectContact[] = allSentMapped.filter((c) => {
     if (!currentMember) {
       // Unauthenticated: show all sent contacts (fallback)
       return true;
     }
-    // Only show contacts where this user is the recorded sender
-    if (!c.outreachMessageSender) return false;
+    // No sender recorded — show to all users (unattributed, can't scope to one person)
+    if (!c.outreachMessageSender) return true;
+    // Sender recorded — only show to the matching user
     return c.outreachMessageSender.toLowerCase() === currentMember.toLowerCase();
   });
 
