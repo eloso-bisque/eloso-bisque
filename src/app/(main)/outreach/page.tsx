@@ -53,27 +53,26 @@ const EMAIL_TO_MEMBER: Record<string, TeamMember> = {
 
 /** Inner async component — performs the heavy Kissinger fetches after the shell renders. */
 async function OutreachContent({ currentMember }: { currentMember: TeamMember | null }) {
-  // Fetch prospect contacts (tagged "prospect-contact"), sent contacts (tagged
-  // "outreach-sent"), and Trigify signal contacts in parallel.
+  // Fetch prospect contacts (tagged "prospect-contact") scoped to this user's queue,
+  // sent contacts (tagged "outreach-sent"), and Trigify signal contacts in parallel.
   // prospect-contact and outreach-sent are disjoint — a contact is removed from
   // prospect-contact when touched and added to outreach-sent.
+  // The assignee defaults to "drew" if the current member is unknown (unauthenticated)
+  // so the page still renders; in practice all team members are authenticated.
+  const assigneeKey = (currentMember ?? "drew").toLowerCase();
   const [rawContacts, rawSentContacts, rawSignalContacts] = await Promise.all([
-    fetchProspectContacts(),
+    fetchProspectContacts(assigneeKey),
     fetchSentContacts(),
     fetchSignalContacts(),
   ]);
   const offline = rawContacts === null;
 
-  // Check if Claude API is available for personalization
-  const claudeEnabled = Boolean(process.env.ANTHROPIC_API_KEY);
-
   // Map and sort active contacts: fit-high first, then alphabetically by company.
-  // All contacts in rawContacts have "prospect-contact" tag — the tag is the truth.
-  // Touched/sent contacts are now in rawSentContacts (tagged "outreach-sent") and
-  // are NOT present in rawContacts. No stage-based filtering needed here.
+  // Filter to only cold (or no stage) — touched_1+ contacts are shown in the Sent tab.
   const fitOrder = { high: 0, medium: 1, low: 2 };
   const contacts: ProspectContact[] = (rawContacts ?? [])
     .map(mapContact)
+    .filter((c) => c.outreachStage === "cold" || !c.outreachStage)
     .sort((a, b) => {
       const fitDiff = (fitOrder[a.fitTier] ?? 9) - (fitOrder[b.fitTier] ?? 9);
       if (fitDiff !== 0) return fitDiff;
@@ -172,7 +171,6 @@ async function OutreachContent({ currentMember }: { currentMember: TeamMember | 
         teamMembers={TEAM_MEMBERS}
         allTasks={allTasks}
         allMessages={allMessages}
-        claudeEnabled={claudeEnabled}
         sentContacts={sentContacts}
         signalContacts={signalContacts}
         currentMember={currentMember}

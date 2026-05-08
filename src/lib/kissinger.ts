@@ -975,15 +975,27 @@ const EDGES_FROM_PERSON_QUERY = `
 `;
 
 /**
- * Fetch all prospect contacts (tagged "prospect-contact") from Kissinger,
- * and enrich each with their org's sector tags via the works_at edge.
+ * Fetch prospect contacts (tagged "prospect-contact") from Kissinger,
+ * filtered to the given assignee's queue.
+ *
+ * Queue filtering rules:
+ * - If an entity has any "queue:*" tag, it is only included if it has
+ *   "queue:<assignee>" (case-insensitive). This ensures each user sees
+ *   only their own contacts.
+ * - Entities with NO "queue:*" tag are excluded — they exist in the global
+ *   pool but have not been assigned to anyone yet. Use /api/outreach/new-batch
+ *   to pull fresh contacts into a user's queue.
+ *
+ * @param assignee — lowercase team member name, e.g. "drew", "ben", "jake"
  *
  * Returns null if Kissinger is unreachable.
  */
-async function _fetchProspectContacts(): Promise<ProspectContactRaw[] | null> {
+async function _fetchProspectContacts(assignee: string): Promise<ProspectContactRaw[] | null> {
+  const queueTag = `queue:${assignee.toLowerCase()}`;
+
   try {
     // Fetch all person entities in pages (Kissinger has 7k+ people)
-    // We only need those tagged "prospect-contact"
+    // We only need those tagged "prospect-contact" AND in this user's queue
     const PAGE = 500;
     const prospectPersons: { id: string; name: string; tags: string[] }[] = [];
     let cursor: string | undefined;
@@ -1001,7 +1013,16 @@ async function _fetchProspectContacts(): Promise<ProspectContactRaw[] | null> {
       const raw = data.entities;
       const filtered = raw.edges
         .map((e) => e.node)
-        .filter((n) => n.tags.includes("prospect-contact"));
+        .filter((n) => {
+          if (!n.tags.includes("prospect-contact")) return false;
+          // Queue filtering: entities with any queue:* tag must have this user's tag
+          const hasAnyQueueTag = n.tags.some((t) => t.startsWith("queue:"));
+          if (hasAnyQueueTag) {
+            return n.tags.includes(queueTag);
+          }
+          // No queue:* tag at all — exclude (not yet assigned to anyone)
+          return false;
+        });
       prospectPersons.push(...filtered);
 
       if (!raw.pageInfo.hasNextPage || !raw.pageInfo.endCursor) break;
@@ -1133,17 +1154,21 @@ async function _fetchProspectContacts(): Promise<ProspectContactRaw[] | null> {
 }
 
 /**
- * Cached version of _fetchProspectContacts.
- * TTL: 60 seconds. Tag: "contacts" — call revalidateTag("contacts") after mutations.
+ * Fetch prospect contacts for a specific assignee (queue:<assignee> tag).
  *
- * Wrapping with unstable_cache means the expensive multi-page scan + N*3 detail/edges/org
- * fetches only run once per 60-second window rather than on every page request.
+ * Cached per-assignee with a 60-second TTL.
+ * Tag: "contacts" — call revalidateTag("contacts") after mutations.
+ *
+ * @param assignee — lowercase team member name: "drew", "ben", or "jake"
  */
-export const fetchProspectContacts = unstable_cache(
-  _fetchProspectContacts,
-  ["prospect-contacts"],
-  { revalidate: 60, tags: ["contacts"] }
-);
+export async function fetchProspectContacts(assignee: string): Promise<ProspectContactRaw[] | null> {
+  const cached = unstable_cache(
+    _fetchProspectContacts,
+    [`prospect-contacts-${assignee.toLowerCase()}`],
+    { revalidate: 60, tags: ["contacts"] }
+  );
+  return cached(assignee);
+}
 
 // ---------------------------------------------------------------------------
 // Sent contacts query — for the Sent tab
@@ -1155,7 +1180,11 @@ export const fetchProspectContacts = unstable_cache(
 async function _fetchSentContacts(): Promise<ProspectContactRaw[]> {
   try {
     const PAGE = 500;
+    // outreach-sent tagged persons (fully sent, tag-based truth)
     const sentPersons: { id: string; name: string; tags: string[] }[] = [];
+    // prospect-contact persons that are T2+ (touched_2, touched_3, responded) — stage-based
+    // These haven't had their tag moved yet but belong in the Sent tab
+    const t2ProspectPersons: { id: string; name: string; tags: string[] }[] = [];
     let cursor: string | undefined;
     let safety = 0;
 
@@ -1169,74 +1198,88 @@ async function _fetchSentContacts(): Promise<ProspectContactRaw[]> {
       }>(PROSPECT_CONTACT_QUERY, { first: PAGE, after: cursor }, { tags: ["contacts"] });
 
       const raw = data.entities;
-      const filtered = raw.edges
-        .map((e) => e.node)
-        .filter((n) => n.tags.includes("outreach-sent"));
-      sentPersons.push(...filtered);
+      for (const node of raw.edges.map((e) => e.node)) {
+        if (node.tags.includes("outreach-sent")) {
+          sentPersons.push(node);
+        } else if (node.tags.includes("prospect-contact")) {
+          // We'll check their outreach_stage after fetching detail below
+          t2ProspectPersons.push(node);
+        }
+      }
 
       if (!raw.pageInfo.hasNextPage || !raw.pageInfo.endCursor) break;
       cursor = raw.pageInfo.endCursor;
     }
 
-    if (sentPersons.length === 0) return [];
+    if (sentPersons.length === 0 && t2ProspectPersons.length === 0) return [];
 
-    // Enrich each sent person with their meta (title, stage, linkedin, sender)
-    const enriched = await Promise.allSettled(
-      sentPersons.map(async (person) => {
-        const detail = await gql<{ entity: ContactDetail }>(
-          ENTITY_DETAIL_QUERY,
-          { id: person.id },
-          { tags: ["contacts"] }
-        );
+    /** Shared helper: enrich a person stub into ProspectContactRaw */
+    async function enrichPerson(person: { id: string; name: string; tags: string[] }): Promise<ProspectContactRaw> {
+      const detail = await gql<{ entity: ContactDetail }>(
+        ENTITY_DETAIL_QUERY,
+        { id: person.id },
+        { tags: ["contacts"] }
+      );
 
-        const meta = Object.fromEntries(
-          detail.entity.meta.map((m) => [m.key, m.value])
-        );
+      const meta = Object.fromEntries(
+        detail.entity.meta.map((m) => [m.key, m.value])
+      );
 
-        let nestedMeta: Record<string, string> = {};
-        if (meta["meta"]) {
-          try {
-            nestedMeta = JSON.parse(meta["meta"]) as Record<string, string>;
-          } catch {
-            // not JSON — ignore
-          }
+      let nestedMeta: Record<string, string> = {};
+      if (meta["meta"]) {
+        try {
+          nestedMeta = JSON.parse(meta["meta"]) as Record<string, string>;
+        } catch {
+          // not JSON — ignore
         }
+      }
 
-        const title = meta["title"] ?? nestedMeta["title"] ?? "";
-        const company = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
-        const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+      const title = meta["title"] ?? nestedMeta["title"] ?? "";
+      const company = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
+      const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
 
-        const outreachStageMeta = meta["outreach_stage"] ?? "cold";
-        const validStages: OutreachStage[] = ["cold", "touched_1", "touched_2", "touched_3", "responded"];
-        const outreachStage: OutreachStage = validStages.includes(outreachStageMeta as OutreachStage)
-          ? (outreachStageMeta as OutreachStage)
-          : "cold";
+      const outreachStageMeta = meta["outreach_stage"] ?? "cold";
+      const validStages: OutreachStage[] = ["cold", "touched_1", "touched_2", "touched_3", "responded"];
+      const outreachStage: OutreachStage = validStages.includes(outreachStageMeta as OutreachStage)
+        ? (outreachStageMeta as OutreachStage)
+        : "cold";
 
-        const outreachMessage = meta["outreach_message"] ?? undefined;
-        const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;
-        const outreachMessageSender = meta["outreach_message_sender"] ?? undefined;
+      const outreachMessage = meta["outreach_message"] ?? undefined;
+      const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;
+      const outreachMessageSender = meta["outreach_message_sender"] ?? undefined;
 
-        return {
-          id: person.id,
-          name: person.name,
-          title,
-          company,
-          sector: [],
-          fitTier: "high" as const,
-          notes: detail.entity.notes ?? "",
-          orgId: undefined,
-          outreachStage,
-          linkedinUrl,
-          outreachMessage,
-          outreachMessageGeneratedAt,
-          outreachMessageSender,
-        } satisfies ProspectContactRaw;
-      })
-    );
+      return {
+        id: person.id,
+        name: person.name,
+        title,
+        company,
+        sector: [],
+        fitTier: "high" as const,
+        notes: detail.entity.notes ?? "",
+        orgId: undefined,
+        outreachStage,
+        linkedinUrl,
+        outreachMessage,
+        outreachMessageGeneratedAt,
+        outreachMessageSender,
+      } satisfies ProspectContactRaw;
+    }
+
+    // Enrich outreach-sent persons (unconditional — tag is the truth)
+    const enrichedSent = await Promise.allSettled(sentPersons.map(enrichPerson));
+
+    // Enrich prospect-contact persons to check their stage; keep only T2+
+    const T2_PLUS_STAGES = new Set<OutreachStage>(["touched_1", "touched_2", "touched_3", "responded"]);
+    const enrichedProspects = await Promise.allSettled(t2ProspectPersons.map(enrichPerson));
 
     const results: ProspectContactRaw[] = [];
-    for (const r of enriched) {
+    for (const r of enrichedSent) {
       if (r.status === "fulfilled") {
+        results.push(r.value);
+      }
+    }
+    for (const r of enrichedProspects) {
+      if (r.status === "fulfilled" && T2_PLUS_STAGES.has(r.value.outreachStage)) {
         results.push(r.value);
       }
     }
@@ -1247,8 +1290,11 @@ async function _fetchSentContacts(): Promise<ProspectContactRaw[]> {
 }
 
 /**
- * Fetch all sent contacts (tagged "outreach-sent").
- * These have been touched at least once and are no longer in the prospect-contact pool.
+ * Fetch all sent contacts for the Sent tab.
+ * Includes:
+ *   - Persons tagged "outreach-sent" (tag-based truth, fully sent)
+ *   - Persons tagged "prospect-contact" with outreachStage of touched_2, touched_3, or responded
+ *     (T2+ contacts whose tag has not yet been moved to outreach-sent)
  * TTL: 60 seconds. Tag: "contacts".
  */
 export const fetchSentContacts = unstable_cache(

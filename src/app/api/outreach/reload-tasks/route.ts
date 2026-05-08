@@ -211,11 +211,27 @@ export async function POST(request: Request) {
     // Helper: returns true if a person qualifies by provenance tier.
     //   Tier 1 — source:human or source:csv
     //   Tier 2 — pipeline-contact
-    // AND: US-based AND not tagged prospect-skipped
+    // AND: US-based AND not tagged prospect-skipped AND not tagged outreach-sent
+    // The outreach-sent exclusion is critical: once a contact has been reached out
+    // to (and had prospect-contact removed + outreach-sent added), they must never
+    // be re-added to the outreach queue by this reload. Without this guard, every
+    // reload after the last cleanup re-adds all sent Tier 1 contacts as candidates.
+    //
+    // BIS-633: Tier 1 source:human contacts skip the isUSContact check.
+    // These are personally known contacts — excluding them based on a location
+    // heuristic is wrong. Only apply isUSContact to pipeline-contact (Tier 2).
     const isProvenanceEligible = (person: (typeof allPeople)[number]): boolean => {
-      const isTier1 = person.tags.includes("source:human") || person.tags.includes("source:csv");
+      const isHumanSource = person.tags.includes("source:human");
+      const isTier1 = isHumanSource || person.tags.includes("source:csv");
       const isTier2 = person.tags.includes("pipeline-contact");
-      return (isTier1 || isTier2) && isUSContact(person) && !person.tags.includes("prospect-skipped");
+      // Tier 1 source:human contacts bypass the US location filter
+      const passesLocationFilter = isHumanSource || isUSContact(person);
+      return (
+        (isTier1 || isTier2) &&
+        passesLocationFilter &&
+        !person.tags.includes("prospect-skipped") &&
+        !person.tags.includes("outreach-sent")
+      );
     };
 
     // Determine which current outreach contacts still qualify for the Active queue:
