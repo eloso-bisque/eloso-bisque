@@ -72,11 +72,30 @@ export async function POST(request: NextRequest) {
 
   const entityIdSet = new Set(entityIds);
 
-  // Fetch all prospect contacts from Kissinger (includes notes, linkedinUrl, sector, etc.)
-  const allContacts = await fetchProspectContacts();
-  if (allContacts === null) {
+  // Fetch prospect contacts for all team members so we can look up any entity ID.
+  // When an assigneeOverride is given, only fetch for that user (faster); otherwise
+  // fetch for all three users and merge (used by scheduled jobs that pass specific IDs).
+  const assigneesToFetch: TeamMember[] = assigneeOverride
+    ? [assigneeOverride]
+    : ["Ben", "Jake", "Drew"];
+
+  const contactsByAssignee = await Promise.all(
+    assigneesToFetch.map((a) => fetchProspectContacts(a.toLowerCase()))
+  );
+
+  if (contactsByAssignee.some((c) => c === null)) {
     return NextResponse.json({ error: "Kissinger unreachable" }, { status: 503 });
   }
+
+  // Merge and de-duplicate by ID
+  const seenIds = new Set<string>();
+  const allContacts = contactsByAssignee
+    .flatMap((c) => c ?? [])
+    .filter((c) => {
+      if (seenIds.has(c.id)) return false;
+      seenIds.add(c.id);
+      return true;
+    });
 
   // Filter to only the requested IDs
   const targeted = allContacts.filter((c) => entityIdSet.has(c.id));
