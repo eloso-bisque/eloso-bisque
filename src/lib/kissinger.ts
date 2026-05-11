@@ -1060,7 +1060,8 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
         }
 
         const title = meta["title"] ?? nestedMeta["title"] ?? "";
-        const company = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
+        // company will be resolved after the org fetch (org name is the authoritative fallback)
+        const companyFromMeta = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
 
         // Find the linked org via works_at edge
         const worksAtEdge = edgesData.edgesFrom.edges
@@ -1071,14 +1072,16 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
         let fitTier: "high" | "medium" | "low" = "high";
         let orgId: string | undefined;
 
+        let orgName = "";
         if (worksAtEdge) {
           orgId = worksAtEdge.target;
-          // Fetch the org to get its sector tags
+          // Fetch the org to get its name and sector tags
           try {
-            const orgData = await gql<{ entity: { tags: string[] } }>(
-              `query OrgTags($id: String!) { entity(id: $id) { tags } }`,
+            const orgData = await gql<{ entity: { name: string; tags: string[] } }>(
+              `query OrgTags($id: String!) { entity(id: $id) { name tags } }`,
               { id: orgId }
             );
+            orgName = orgData.entity.name ?? "";
             const orgTags = orgData.entity.tags;
             // Extract sector tags (exclude meta tags like prospect, eloso, fit-*)
             sector = orgTags.filter(
@@ -1094,13 +1097,21 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
           }
         }
 
+        // Final company: meta takes precedence, org entity name is the authoritative fallback
+        // for LinkedIn CSV contacts which don't store company in person meta.
+        const company = companyFromMeta || orgName;
+
         const outreachStageMeta = meta["outreach_stage"] ?? "cold";
         const validStages: OutreachStage[] = ["cold", "touched_1", "touched_2", "touched_3", "responded"];
         const outreachStage: OutreachStage = validStages.includes(outreachStageMeta as OutreachStage)
           ? (outreachStageMeta as OutreachStage)
           : "cold";
 
-        const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+        // LinkedIn URL from stored meta; for LinkedIn CSV contacts without a stored URL,
+        // construct a search URL from name so the icon/button is still usable.
+        const storedLinkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+        const linkedinUrl = storedLinkedinUrl ||
+          `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name)}`;
 
         const outreachMessage = meta["outreach_message"] ?? undefined;
         const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;
