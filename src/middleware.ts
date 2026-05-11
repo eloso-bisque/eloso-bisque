@@ -1,56 +1,85 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
+import { verifyToken, COOKIE_NAME, SEVEN_DAYS, signToken } from '@/lib/auth';
 
-const COOKIE_NAME = "eloso_session";
-const SESSION_VALUE = "authenticated";
-
-// Public paths that don't require authentication
 const PUBLIC_PATHS = [
-  "/login",
-  "/api/auth/login",
-  "/api/auth/logout",
-  "/_next",
-  "/favicon.ico",
+  '/login',
+  '/reset-password',
+  '/api/auth/login',
+  '/api/auth/logout',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+  '/_next',
+  '/favicon.ico',
+  // bisque-booking public routes
+  '/book',
+  '/cancel',
+  '/reschedule',
+  '/api/booking/slots',
+  '/api/booking/create',
+  '/api/booking/cancel',
+  '/api/booking/reschedule',
+  '/api/cron/reminders',
 ];
 
 function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/") || pathname.startsWith(p));
+  return PUBLIC_PATHS.some(
+    (p) =>
+      pathname === p ||
+      pathname.startsWith(p + '/') ||
+      pathname.startsWith(p)
+  );
 }
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (isPublicPath(pathname)) {
-    return NextResponse.next();
-  }
+  if (isPublicPath(pathname)) return NextResponse.next();
 
   // Allow service-to-service calls that present a valid X-Internal-Secret header.
   // This check runs before the session cookie check so internal API calls (e.g.
   // scheduled jobs run by Lobster) can reach route handlers without a browser session.
   const internalSecret = process.env.LOBSTER_INTERNAL_SECRET;
-  const providedSecret = request.headers.get("X-Internal-Secret");
+  const providedSecret = request.headers.get('X-Internal-Secret');
   if (internalSecret && providedSecret && providedSecret === internalSecret) {
     return NextResponse.next();
   }
 
-  const sessionCookie = request.cookies.get(COOKIE_NAME);
-
-  if (!sessionCookie || sessionCookie.value !== SESSION_VALUE) {
-    const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("from", pathname);
+  const token = request.cookies.get(COOKIE_NAME)?.value;
+  if (!token) {
+    const loginUrl = new URL('/login', request.url);
+    loginUrl.searchParams.set('from', pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  return NextResponse.next();
+  const session = await verifyToken(token);
+  if (!session) {
+    const loginUrl = new URL('/login', request.url);
+    loginUrl.searchParams.set('from', pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  const response = NextResponse.next();
+
+  // Silent token renewal: if less than 24h remaining, reissue
+  const exp = session.exp as number;
+  if (exp - Date.now() / 1000 < 86400) {
+    const newToken = await signToken({
+      sub: session.sub!,
+      email: session.email,
+      name: session.name,
+    });
+    response.cookies.set(COOKIE_NAME, newToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: SEVEN_DAYS,
+      path: '/',
+    });
+  }
+
+  return response;
 }
 
 export const config = {
-  matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     */
-    "/((?!_next/static|_next/image|favicon.ico).*)",
-  ],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 };
