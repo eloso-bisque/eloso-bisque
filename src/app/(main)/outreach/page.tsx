@@ -121,8 +121,29 @@ async function OutreachContent({ currentMember }: { currentMember: TeamMember | 
     })
     .sort((a, b) => computeSignalScore(b) - computeSignalScore(a));
 
-  // Distribute active contacts across Ben/Jake/Drew
-  const distributed = distributeContacts(contacts);
+  // Build distributed contact map.
+  //
+  // fetchProspectContacts is already queue-scoped: it returns ONLY contacts tagged
+  // "queue:<assignee>". Re-distributing them via distributeContacts() would split
+  // them across Ben/Jake/Drew by sector affinity, causing the logged-in user to see
+  // only ~1/3 of their own queue in the Active tab.
+  //
+  // Fix: when the user is authenticated, put ALL their fetched contacts into their
+  // own bucket (they're already theirs). Fall back to distributeContacts for the
+  // unauthenticated case (no currentMember) where the old round-robin logic is needed.
+  const now = new Date().toISOString();
+  let distributed: Record<TeamMember, OutreachTask[]>;
+  if (currentMember) {
+    const myTasks: OutreachTask[] = contacts.map((contact) => ({
+      id: `${contact.id}-${currentMember}`,
+      contact,
+      assignee: currentMember,
+      generatedAt: now,
+    }));
+    distributed = { Ben: [], Jake: [], Drew: [], [currentMember]: myTasks };
+  } else {
+    distributed = distributeContacts(contacts);
+  }
 
   // Pre-generate all messages (server-side, no API key needed for templates)
   const messagesPerMember: Record<TeamMember, ReturnType<typeof generateMessage>[]> = {

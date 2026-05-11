@@ -46,6 +46,9 @@ export default function OutreachPageClient({
   const [reloading, setReloading] = useState(false);
   const [reloadResult, setReloadResult] = useState<NewBatchResult | null>(null);
   const [reloadError, setReloadError] = useState<string | null>(null);
+  // Optimistic pending count: how many new contacts are loading after New Batch.
+  // Shown as a badge until router.refresh() completes and real cards arrive.
+  const [pendingCount, setPendingCount] = useState(0);
 
   // Optimistic removal: IDs removed client-side immediately on "Mark Sent"
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
@@ -68,6 +71,7 @@ export default function OutreachPageClient({
     setReloading(true);
     setReloadResult(null);
     setReloadError(null);
+    setPendingCount(0);
     try {
       const res = await fetch("/api/outreach/new-batch", { method: "POST" });
       if (!res.ok) {
@@ -77,10 +81,17 @@ export default function OutreachPageClient({
       }
       const data = await res.json() as NewBatchResult;
       setReloadResult(data);
+      // Show optimistic "loading" badge immediately while router.refresh() runs
+      if (data.added > 0) {
+        setPendingCount(data.added);
+      }
       // Refresh server data — re-runs the page Server Component
-      router.refresh();
+      await router.refresh();
+      // Real cards have arrived — clear the pending badge
+      setPendingCount(0);
     } catch {
       setReloadError("Network error — check connection and try again.");
+      setPendingCount(0);
     } finally {
       setReloading(false);
     }
@@ -389,12 +400,22 @@ export default function OutreachPageClient({
         ) : isSignalsTab ? (
           <SignalsTab contacts={signalContacts} />
         ) : (
-          <OutreachTaskList
-            tasks={activeTasks}
-            messages={activeMessages}
-            onMarkSent={handleMarkSentOptimistic}
-            onUnmarkSent={handleUnmarkSentOptimistic}
-          />
+          <>
+            {pendingCount > 0 && (
+              <div className="flex items-center gap-2 px-4 py-2 mb-3 bg-bisque-50 border border-bisque-200 rounded-lg text-sm text-bisque-600 animate-pulse">
+                <svg className="w-4 h-4 shrink-0 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                + {pendingCount} new contact{pendingCount !== 1 ? "s" : ""} loading…
+              </div>
+            )}
+            <OutreachTaskList
+              tasks={activeTasks}
+              messages={activeMessages}
+              onMarkSent={handleMarkSentOptimistic}
+              onUnmarkSent={handleUnmarkSentOptimistic}
+            />
+          </>
         )}
       </div>
     </div>

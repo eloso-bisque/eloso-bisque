@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import type { OutreachTask, GeneratedMessage, OutreachStage } from "@/lib/outreach";
 import { isHotSignal, isWarmSignal, daysSince } from "@/lib/outreach";
@@ -16,9 +16,11 @@ function relativeSignalDate(dateStr: string): string {
 
 interface OutreachTaskCardProps {
   task: OutreachTask;
-  message: GeneratedMessage;
-  /** If true, show "Personalize with AI" button (API key available) */
-  claudeEnabled?: boolean;
+  /** Template/AI message. May be undefined when the contact was just added and
+   *  async generation hasn't completed yet — card shows a skeleton in that case. */
+  message?: GeneratedMessage;
+  onMarkSent?: (id: string) => void;
+  onUnmarkSent?: (id: string) => void;
 }
 
 type MessageSource = "template" | "claude";
@@ -71,7 +73,7 @@ function StageBadge({ stage }: { stage: OutreachStage }) {
 // Main component
 // ---------------------------------------------------------------------------
 
-export default function OutreachTaskCard({ task, message, claudeEnabled = false }: OutreachTaskCardProps) {
+export default function OutreachTaskCard({ task, message, onMarkSent, onUnmarkSent }: OutreachTaskCardProps) {
   const { contact } = task;
   const router = useRouter();
 
@@ -81,22 +83,42 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
 
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [personalizing, setPersonalizing] = useState(false);
-  // Track the timestamp of the most recent in-session generation.
-  // null means no regeneration has happened this session — fall back to the
-  // stored Kissinger value (contact.outreachMessageGeneratedAt).
-  const [localGeneratedAt, setLocalGeneratedAt] = useState<string | null>(null);
 
-  // If a stored outreach_message exists in Kissinger meta, show it immediately
-  // without requiring the user to click "Personalize with AI".
+  // If a stored outreach_message exists in Kissinger meta, show it immediately.
   const storedMessage = contact.outreachMessage;
-  const [displayMessage, setDisplayMessage] = useState<DisplayMessage>(() => {
-    if (storedMessage) {
-      return { text: storedMessage, source: "claude", angle: message.angle };
+
+  // messageGenerating: true when neither a Kissinger-stored message nor a
+  // template-generated message is available yet (contact just added to queue).
+  const messageGenerating = !storedMessage && !message;
+
+  const displayMessage: DisplayMessage | null = messageGenerating
+    ? null
+    : storedMessage
+      ? { text: storedMessage, source: "claude", angle: message!.angle }
+      : { text: message!.message, source: "template", angle: message!.angle };
+
+  // Poll every 10 seconds for a freshly-generated message when none exists yet.
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!messageGenerating) {
+      // Message is ready — stop any active poll
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      return;
     }
-    return { text: message.message, source: "template", angle: message.angle };
-  });
-  const [personalizeError, setPersonalizeError] = useState<string | null>(null);
+    // Start polling — re-fetch server data which will pick up the message once generated
+    pollTimerRef.current = setInterval(() => {
+      router.refresh();
+    }, 10_000);
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [messageGenerating, router]);
 
   // Mark Sent state
   const [markingTouch, setMarkingTouch] = useState(false);
@@ -119,6 +141,7 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
   const touchNumber = nextTouchNumber(stage);
 
   const handleCopy = useCallback(async () => {
+    if (!displayMessage) return;
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         await navigator.clipboard.writeText(displayMessage.text);
@@ -137,36 +160,12 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
     } catch {
       // Silent fail — user can select and copy manually
     }
-  }, [displayMessage.text]);
-
-  const handlePersonalize = useCallback(async () => {
-    setPersonalizing(true);
-    setPersonalizeError(null);
-    try {
-      const res = await fetch("/api/outreach/generate-message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contact: task.contact,
-          assignee: task.assignee,
-          entityId: task.contact.id,
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { message: string; source: MessageSource; angle: "vision" | "technical" | "strategic" };
-      setDisplayMessage({ text: data.message, source: data.source, angle: data.angle });
-      // Record the actual generation time for this session so the provenance note
-      // does not show the stale stored timestamp from Kissinger.
-      setLocalGeneratedAt(new Date().toISOString());
-    } catch {
-      setPersonalizeError("Personalization failed — using template.");
-    } finally {
-      setPersonalizing(false);
-    }
-  }, [task.contact, task.assignee]);
+  }, [displayMessage]);
 
   const handleMarkSent = useCallback(async () => {
     if (touchNumber === null) return;
+    // Optimistic removal — card disappears immediately
+    onMarkSent?.(contact.id);
     setMarkingTouch(true);
     setTouchError(null);
     try {
@@ -179,16 +178,17 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
         const data = (await res.json()) as { error?: string };
         throw new Error(data.error ?? `HTTP ${res.status}`);
       }
-      const data = (await res.json()) as { newStage: OutreachStage };
-      setStage(data.newStage);
-      // Refresh server data so the contact moves to the Sent tab on next render
+      // Card is already removed — no need to update internal stage state.
+      // Refresh server data so the contact moves to the Sent tab on next render.
       router.refresh();
     } catch (err) {
+      // API failed — restore the card
+      onUnmarkSent?.(contact.id);
       setTouchError(err instanceof Error ? err.message : "Failed to mark sent");
     } finally {
       setMarkingTouch(false);
     }
-  }, [contact.id, touchNumber, router]);
+  }, [contact.id, touchNumber, router, onMarkSent, onUnmarkSent]);
 
   const handleSkip = useCallback(async () => {
     setSkipping(true);
@@ -345,38 +345,22 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
 
             {/* Desktop action buttons */}
             <div className="hidden md:flex items-center gap-2 shrink-0 flex-wrap justify-end">
-              {claudeEnabled && (
+              {messageGenerating ? (
+                <span className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-bisque-100 bg-bisque-50 text-bisque-400">
+                  <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a10 10 0 100 10h-4a8 8 0 01-8-8z" />
+                  </svg>
+                  Message generating…
+                </span>
+              ) : (
                 <button
-                  onClick={handlePersonalize}
-                  disabled={personalizing}
-                  className="px-3 py-1.5 text-sm font-medium rounded-lg bg-violet-50 border border-violet-200 text-violet-700 hover:bg-violet-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                  onClick={() => setExpanded((v) => !v)}
+                  className="px-3 py-1.5 text-sm font-medium rounded-lg border border-bisque-200 text-bisque-700 hover:bg-bisque-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-bisque-400"
                 >
-                  {personalizing ? (
-                    <>
-                      <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      Personalizing…
-                    </>
-                  ) : displayMessage.source === "claude" ? (
-                    <>↺ Regenerate</>
-                  ) : (
-                    <>✦ Personalize with AI</>
-                  )}
+                  {expanded ? "Hide message" : "Show message"}
                 </button>
               )}
-              {displayMessage.source === "claude" && !personalizing && (
-                <span className="px-2 py-1 text-xs font-medium rounded-lg bg-violet-50 border border-violet-200 text-violet-600">
-                  ✦ AI-personalized
-                </span>
-              )}
-              <button
-                onClick={() => setExpanded((v) => !v)}
-                className="px-3 py-1.5 text-sm font-medium rounded-lg border border-bisque-200 text-bisque-700 hover:bg-bisque-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-bisque-400"
-              >
-                {expanded ? "Hide message" : "Show message"}
-              </button>
               {/* Mark Sent button */}
               {touchNumber !== null && stage !== "responded" && (
                 <button
@@ -418,9 +402,6 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
             </div>
           </div>
 
-          {personalizeError && (
-            <p className="text-xs text-amber-600 mt-2">{personalizeError}</p>
-          )}
           {touchError && (
             <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1 mt-2">
               {touchError}
@@ -429,48 +410,36 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
 
           {/* Mobile action row */}
           <div className="flex md:hidden gap-2 mt-3 flex-wrap">
-            {claudeEnabled && (
+            {messageGenerating ? (
+              <span className="flex items-center justify-center gap-1.5 px-3 py-2.5 min-h-[44px] text-sm font-medium rounded-lg bg-bisque-50 border border-bisque-100 text-bisque-400 whitespace-nowrap">
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a10 10 0 100 10h-4a8 8 0 01-8-8z" />
+                </svg>
+                Generating…
+              </span>
+            ) : (
               <button
-                onClick={handlePersonalize}
-                disabled={personalizing}
-                className="flex items-center justify-center gap-1.5 px-3 py-2.5 min-h-[44px] text-sm font-medium rounded-lg bg-violet-50 border border-violet-200 text-violet-700 transition-colors focus:outline-none disabled:opacity-50"
-                aria-label={displayMessage.source === "claude" ? "Regenerate AI message" : "Personalize with AI"}
+                onClick={handleCopy}
+                className={`flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] text-sm font-semibold rounded-lg transition-colors focus:outline-none ${
+                  copied
+                    ? "bg-green-100 text-green-700 border border-green-200"
+                    : "bg-bisque-700 text-bisque-50"
+                }`}
+                aria-label="Copy LinkedIn message to clipboard"
               >
-                {personalizing ? (
-                  <>
-                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    …
-                  </>
-                ) : displayMessage.source === "claude" ? (
-                  <>↺</>
+                {copied ? (
+                  <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
                 ) : (
-                  <>✦</>
+                  <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
+                    <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
+                  </svg>
                 )}
               </button>
             )}
-            <button
-              onClick={handleCopy}
-              className={`flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] text-sm font-semibold rounded-lg transition-colors focus:outline-none ${
-                copied
-                  ? "bg-green-100 text-green-700 border border-green-200"
-                  : "bg-bisque-700 text-bisque-50"
-              }`}
-              aria-label="Copy LinkedIn message to clipboard"
-            >
-              {copied ? (
-                <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                </svg>
-              ) : (
-                <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-                  <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
-                  <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
-                </svg>
-              )}
-            </button>
             {/* Mobile: Mark Sent */}
             {touchNumber !== null && stage !== "responded" && (
               <button
@@ -586,8 +555,8 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
           </div>
         )}
 
-        {/* Expandable message panel */}
-        {expanded && (
+        {/* Expandable message panel — only when not in generating state */}
+        {expanded && !messageGenerating && displayMessage && (
           <div className="border-t border-bisque-100 bg-bisque-50/50 px-4 md:px-5 py-4 space-y-3">
             {/* Angle badge + copy button (desktop) */}
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -633,18 +602,13 @@ export default function OutreachTaskCard({ task, message, claudeEnabled = false 
               </p>
             </div>
 
-            {/* Provenance note.
-                Use localGeneratedAt (set on regeneration in this session) in preference
-                to contact.outreachMessageGeneratedAt (the stale stored value from Kissinger).
-                This prevents the timestamp from showing the old generation date after a
-                Regenerate click. */}
+            {/* Provenance note */}
             <p className="text-xs text-bisque-400">
               {displayMessage.source === "claude" ? (
                 (() => {
-                  const ts = localGeneratedAt ?? contact.outreachMessageGeneratedAt;
-                  const label = localGeneratedAt ? "Generated" : "Stored";
+                  const ts = contact.outreachMessageGeneratedAt;
                   return ts ? (
-                    <>{label} {new Date(ts).toLocaleDateString("en-US", {
+                    <>Stored {new Date(ts).toLocaleDateString("en-US", {
                       month: "short",
                       day: "numeric",
                       year: "numeric",

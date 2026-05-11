@@ -1156,18 +1156,15 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
 /**
  * Fetch prospect contacts for a specific assignee (queue:<assignee> tag).
  *
- * Cached per-assignee with a 60-second TTL.
- * Tag: "contacts" — call revalidateTag("contacts") after mutations.
+ * No unstable_cache wrapper — the fetch-level cache in gql() is sufficient
+ * and reliably busted by revalidateTag("contacts") after mutations.
+ * Removing the unstable_cache wrapper eliminates the race condition where a
+ * server render begins before the cache entry fully flushes after "New Batch".
  *
  * @param assignee — lowercase team member name: "drew", "ben", or "jake"
  */
 export async function fetchProspectContacts(assignee: string): Promise<ProspectContactRaw[] | null> {
-  const cached = unstable_cache(
-    _fetchProspectContacts,
-    [`prospect-contacts-${assignee.toLowerCase()}`],
-    { revalidate: 60, tags: ["contacts"] }
-  );
-  return cached(assignee);
+  return _fetchProspectContacts(assignee);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { ProspectContact, OutreachStage } from "@/lib/outreach";
 
 interface SentContactsListProps {
@@ -84,7 +85,12 @@ export default function SentContactsList({ contacts }: SentContactsListProps) {
                   className={`border-b border-bisque-50 last:border-0 ${idx % 2 === 0 ? "" : "bg-bisque-50/30"}`}
                 >
                   <td className="px-4 py-3">
-                    <div className="font-semibold text-bisque-900">{contact.name}</div>
+                    <Link
+                      href={`/contacts/${contact.id}`}
+                      className="font-semibold text-bisque-900 hover:underline underline-offset-2 hover:text-bisque-700 transition-colors"
+                    >
+                      {contact.name}
+                    </Link>
                     {/* Mobile: show company/title inline */}
                     <div className="md:hidden text-xs text-bisque-500 mt-0.5">
                       {contact.title}

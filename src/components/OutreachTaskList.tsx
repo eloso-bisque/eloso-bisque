@@ -6,10 +6,11 @@ import type { OutreachTask, GeneratedMessage } from "@/lib/outreach";
 interface OutreachTaskListProps {
   tasks: OutreachTask[];
   messages: GeneratedMessage[];
-  claudeEnabled?: boolean;
+  onMarkSent?: (id: string) => void;
+  onUnmarkSent?: (id: string) => void;
 }
 
-export default function OutreachTaskList({ tasks, messages, claudeEnabled = false }: OutreachTaskListProps) {
+export default function OutreachTaskList({ tasks, messages, onMarkSent, onUnmarkSent }: OutreachTaskListProps) {
   const messageMap = new Map(messages.map((m) => [m.task.id, m]));
 
   if (tasks.length === 0) {
@@ -32,8 +33,16 @@ export default function OutreachTaskList({ tasks, messages, claudeEnabled = fals
       </p>
       {tasks.map((task) => {
         const msg = messageMap.get(task.id);
-        if (!msg) return null;
-        return <OutreachTaskCard key={task.id} task={task} message={msg} claudeEnabled={claudeEnabled} />;
+        // Render all contacts — if no message yet, the card shows a generating skeleton
+        return (
+          <OutreachTaskCard
+            key={task.id}
+            task={task}
+            message={msg}
+            onMarkSent={onMarkSent}
+            onUnmarkSent={onUnmarkSent}
+          />
+        );
       })}
     </div>
   );
