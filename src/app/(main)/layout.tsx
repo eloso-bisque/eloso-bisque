@@ -33,6 +33,9 @@ export default function MainLayout({
           <a href="/admin/activity" className="hover:text-bisque-200 transition-colors">
             Activity
           </a>
+          <a href="/api/auth/temporal-token" className="hover:text-bisque-200 transition-colors" target="_blank" rel="noopener noreferrer">
+            Temporal
+          </a>
         </nav>
         <LogoutButton />
       </header>
