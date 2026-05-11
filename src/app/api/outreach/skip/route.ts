@@ -20,7 +20,6 @@ const KISSINGER_API_URL =
 const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
 
 const COOKIE_NAME = "eloso_session";
-const SESSION_VALUE = "authenticated";
 
 /** Minimal GraphQL helper (no Next.js caching — mutations bypass cache). */
 async function gqlMutate<T = unknown>(
@@ -70,7 +69,9 @@ const UPDATE_ENTITY_TAGS_MUTATION = `
 `;
 
 export async function POST(request: NextRequest) {
-  // Auth: valid session cookie OR internal secret
+  // Auth: valid session cookie OR internal secret.
+  // The middleware validates the JWT before the request reaches here;
+  // we just need to confirm the session cookie is present.
   const internalSecret = process.env.LOBSTER_INTERNAL_SECRET;
   const providedSecret = request.headers.get("X-Internal-Secret");
   const isInternalCall =
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest) {
   const hasSessionCookie = cookieHeader
     .split(";")
     .map((c) => c.trim())
-    .some((c) => c === `${COOKIE_NAME}=${SESSION_VALUE}`);
+    .some((c) => c.startsWith(`${COOKIE_NAME}=`));
 
   if (!isInternalCall && !hasSessionCookie) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

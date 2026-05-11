@@ -10,7 +10,7 @@ const BASE_URL =
 // Use resend.dev shared sender as fallback if eloso.ai domain isn't verified yet.
 // Once eloso.ai is verified in Resend dashboard, change this to noreply@eloso.ai.
 const FROM_ADDRESS =
-  process.env.RESEND_FROM_ADDRESS ?? 'Eloso Bisque <onboarding@resend.dev>';
+  process.env.RESEND_FROM_ADDRESS ?? 'Eloso Bisque <noreply@eloso.ai>';
 
 export async function POST(request: NextRequest) {
   let email: string | undefined;

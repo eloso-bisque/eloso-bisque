@@ -637,6 +637,48 @@ function MobileContactList({ contacts }: { contacts: EntitySummary[] }) {
 // Generic contacts table (people / other-orgs / all)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// SignalBadge — renders a last_signal_date meta value with colour coding
+// ---------------------------------------------------------------------------
+
+function SignalBadge({ isoDate }: { isoDate: string }) {
+  const date = new Date(isoDate);
+  const now = new Date();
+  const daysDiff = Math.floor(
+    (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)
+  );
+  const label = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  if (daysDiff <= 7) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 border border-green-200"
+        title={`Last signal: ${isoDate}`}
+      >
+        {label}
+      </span>
+    );
+  }
+  if (daysDiff <= 30) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 border border-yellow-200"
+        title={`Last signal: ${isoDate}`}
+      >
+        {label}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-xs text-bisque-400"
+      title={`Last signal: ${isoDate}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function ContactsTable({
   contacts,
   showKind,
@@ -666,6 +708,13 @@ function ContactsTable({
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden lg:table-cell">
               Tags
             </th>
+            {/* Last Signal column — only populated when meta is available on the entity.
+                Kissinger's EntitySummaryGql (list endpoint) does not expose meta fields.
+                Values appear here for entities enriched via fetchAllEntities + detail fetch,
+                or for any contact that has been individually viewed (which caches meta). */}
+            <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">
+              Last Signal
+            </th>
             <th className="text-left px-4 py-3 font-semibold text-bisque-800 hidden xl:table-cell">
               Updated
             </th>
@@ -678,6 +727,7 @@ function ContactsTable({
           {contacts.map((contact, i) => {
             const company = getMeta(contact, "company");
             const title = getMeta(contact, "title");
+            const lastSignalDate = getMeta(contact, "last_signal_date");
             const displayTags = contact.tags.filter(
               (t) => !["eloso", "prospect-contact"].includes(t)
             );
@@ -714,6 +764,13 @@ function ContactsTable({
                 </td>
                 <td className="px-4 py-3 hidden lg:table-cell">
                   <TagList tags={displayTags} limit={3} />
+                </td>
+                <td className="px-4 py-3 hidden xl:table-cell">
+                  {lastSignalDate ? (
+                    <SignalBadge isoDate={lastSignalDate} />
+                  ) : (
+                    <span className="text-bisque-300 text-xs">—</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-bisque-500 hidden xl:table-cell">
                   {contact.updatedAt ? formatDate(contact.updatedAt) : "—"}
