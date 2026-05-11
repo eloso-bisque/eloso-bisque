@@ -125,6 +125,39 @@ function titleMatches(title: string, keywords: string[]): boolean {
   return keywords.some((kw) => lower.includes(kw.toLowerCase()));
 }
 
+const ENTITY_META_QUERY = `
+  query EntityMeta($id: String!) {
+    entity(id: $id) {
+      id
+      meta { key value }
+    }
+  }
+`;
+
+/** Fetch meta fields for a single entity. Returns empty array on failure. */
+async function fetchEntityMeta(id: string): Promise<{ key: string; value: string }[]> {
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (KISSINGER_API_TOKEN) {
+      headers["Authorization"] = `Bearer ${KISSINGER_API_TOKEN}`;
+    }
+    const res = await fetch(KISSINGER_API_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query: ENTITY_META_QUERY, variables: { id } }),
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      data?: { entity: { id: string; meta: { key: string; value: string }[] } };
+      errors?: unknown[];
+    };
+    return json.data?.entity?.meta ?? [];
+  } catch {
+    return [];
+  }
+}
+
 /** Minimal GraphQL mutate helper. */
 async function gqlMutate<T = unknown>(
   query: string,
@@ -247,24 +280,8 @@ export async function POST(request: Request) {
       return true;
     });
 
-    // Apply excluded titles from criteria
+    // Apply excluded sectors from criteria (tag-based — safe to do without meta fetch)
     let candidates = globalPool;
-    if (criteria?.excluded_titles && criteria.excluded_titles.length > 0) {
-      const excludedTitles = criteria.excluded_titles;
-      candidates = candidates.filter((p) => {
-        const title = p.meta?.find((m) => m.key === "title")?.value ?? "";
-        if (isCOOTitle(title)) return false;
-        return !titleMatches(title, excludedTitles);
-      });
-    } else {
-      // Always exclude COO titles
-      candidates = candidates.filter((p) => {
-        const title = p.meta?.find((m) => m.key === "title")?.value ?? "";
-        return !isCOOTitle(title);
-      });
-    }
-
-    // Apply excluded sectors from criteria
     if (criteria?.excluded_sectors && criteria.excluded_sectors.length > 0) {
       const excludedSectors = criteria.excluded_sectors;
       candidates = candidates.filter((p) => {
@@ -289,8 +306,32 @@ export async function POST(request: Request) {
       return aTier1 - bTier1;
     });
 
+    // Fetch meta for a buffer of top candidates so we can apply COO + excluded-title
+    // filtering before final selection. The summary query (fetchAllEntities) does NOT
+    // include meta fields — p.meta is always undefined there — so we must do a
+    // per-entity meta fetch here. We fetch 3× BATCH_SIZE to ensure we have enough
+    // candidates after filtering.
+    const FETCH_BUFFER = BATCH_SIZE * 3;
+    const candidateBuffer = candidates.slice(0, FETCH_BUFFER);
+    const bufferMeta = await Promise.all(
+      candidateBuffer.map(async (p) => ({
+        person: p,
+        meta: await fetchEntityMeta(p.id),
+      }))
+    );
+
+    const excludedTitles = criteria?.excluded_titles ?? [];
+    const filteredCandidates = bufferMeta
+      .filter(({ meta }) => {
+        const title = meta.find((m) => m.key === "title")?.value ?? "";
+        if (isCOOTitle(title)) return false;
+        if (excludedTitles.length > 0 && titleMatches(title, excludedTitles)) return false;
+        return true;
+      })
+      .map(({ person }) => person);
+
     // Pick top BATCH_SIZE
-    const toAdd = candidates.slice(0, BATCH_SIZE);
+    const toAdd = filteredCandidates.slice(0, BATCH_SIZE);
 
     if (toAdd.length === 0) {
       return NextResponse.json({

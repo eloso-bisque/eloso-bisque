@@ -275,59 +275,68 @@ export async function POST(request: Request) {
       return aTier1 - bTier1;
     });
 
-    // Apply prospect criteria filtering/prioritization if available
-    if (criteria) {
-      const excludedTitles = criteria.excluded_titles ?? [];
-      const preferredTitles = criteria.preferred_titles ?? [];
-      const excludedSectors = criteria.excluded_sectors ?? [];
-      const preferredSectors = criteria.preferred_sectors ?? [];
-
-      // Filter: skip excluded titles
-      if (excludedTitles.length > 0) {
-        candidates = candidates.filter((p) => {
-          const title = p.meta?.find((m) => m.key === "title")?.value ?? "";
-          return !titleMatches(title, excludedTitles);
-        });
-      }
-
-      // Filter: skip excluded sectors (via person tags)
-      if (excludedSectors.length > 0) {
-        candidates = candidates.filter((p) => {
-          const personTags = p.tags.map((t) => t.toLowerCase());
-          return !excludedSectors.some((s) =>
-            personTags.includes(s.toLowerCase())
-          );
-        });
-      }
-
-      // Prioritize: preferred titles and sectors go first
-      if (preferredTitles.length > 0 || preferredSectors.length > 0) {
-        candidates.sort((a, b) => {
-          const aTitle = a.meta?.find((m) => m.key === "title")?.value ?? "";
-          const bTitle = b.meta?.find((m) => m.key === "title")?.value ?? "";
-          const aTags = a.tags.map((t) => t.toLowerCase());
-          const bTags = b.tags.map((t) => t.toLowerCase());
-
-          const aPreferred =
-            (preferredTitles.length > 0 && titleMatches(aTitle, preferredTitles)) ||
-            (preferredSectors.length > 0 &&
-              preferredSectors.some((s) => aTags.includes(s.toLowerCase())));
-          const bPreferred =
-            (preferredTitles.length > 0 && titleMatches(bTitle, preferredTitles)) ||
-            (preferredSectors.length > 0 &&
-              preferredSectors.some((s) => bTags.includes(s.toLowerCase())));
-
-          if (aPreferred && !bPreferred) return -1;
-          if (!aPreferred && bPreferred) return 1;
-          return 0;
-        });
-      }
-    }
-
     // How many slots to fill
     const currentKept = stillQualify.length;
     const slotsToFill = Math.max(0, FILL_TARGET - currentKept);
-    const toAdd = candidates.slice(0, slotsToFill);
+
+    // Apply tag-based sector exclusion first (no meta fetch required)
+    if (criteria?.excluded_sectors && criteria.excluded_sectors.length > 0) {
+      const excludedSectors = criteria.excluded_sectors;
+      candidates = candidates.filter((p) => {
+        const personTags = p.tags.map((t) => t.toLowerCase());
+        return !excludedSectors.some((s) => personTags.includes(s.toLowerCase()));
+      });
+    }
+
+    // Fetch meta for a buffer of top candidates so we can apply COO + title filtering.
+    // The summary query (fetchAllEntities) does NOT include meta fields — p.meta is
+    // always undefined there — so we must do a per-entity meta fetch here.
+    // We fetch 3× slotsToFill (min 60) to have enough candidates after title filtering.
+    const FETCH_BUFFER = Math.max(slotsToFill * 3, 60);
+    const candidateBuffer = candidates.slice(0, FETCH_BUFFER);
+    const bufferMeta = await Promise.all(
+      candidateBuffer.map(async (p) => ({
+        person: p,
+        meta: await fetchEntityMeta(p.id),
+      }))
+    );
+
+    const excludedTitles = criteria?.excluded_titles ?? [];
+    const preferredTitles = criteria?.preferred_titles ?? [];
+    const preferredSectors = criteria?.preferred_sectors ?? [];
+
+    // Filter: always exclude COO titles; also skip explicitly excluded titles
+    const metaFiltered = bufferMeta.filter(({ meta }) => {
+      const title = meta.find((m) => m.key === "title")?.value ?? "";
+      if (isCOOTitle(title)) return false;
+      if (excludedTitles.length > 0 && titleMatches(title, excludedTitles)) return false;
+      return true;
+    });
+
+    // Prioritize: preferred titles and sectors go first
+    if (preferredTitles.length > 0 || preferredSectors.length > 0) {
+      metaFiltered.sort((a, b) => {
+        const aTitle = a.meta.find((m) => m.key === "title")?.value ?? "";
+        const bTitle = b.meta.find((m) => m.key === "title")?.value ?? "";
+        const aTags = a.person.tags.map((t) => t.toLowerCase());
+        const bTags = b.person.tags.map((t) => t.toLowerCase());
+
+        const aPreferred =
+          (preferredTitles.length > 0 && titleMatches(aTitle, preferredTitles)) ||
+          (preferredSectors.length > 0 &&
+            preferredSectors.some((s) => aTags.includes(s.toLowerCase())));
+        const bPreferred =
+          (preferredTitles.length > 0 && titleMatches(bTitle, preferredTitles)) ||
+          (preferredSectors.length > 0 &&
+            preferredSectors.some((s) => bTags.includes(s.toLowerCase())));
+
+        if (aPreferred && !bPreferred) return -1;
+        if (!aPreferred && bPreferred) return 1;
+        return 0;
+      });
+    }
+
+    const toAdd = metaFiltered.slice(0, slotsToFill).map(({ person }) => person);
 
     // --- Remove prospect-contact from those that no longer qualify ---
     const removeResults = await Promise.allSettled(
