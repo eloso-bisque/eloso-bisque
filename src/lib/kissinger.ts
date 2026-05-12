@@ -1244,7 +1244,12 @@ async function _fetchSentContacts(): Promise<ProspectContactRaw[]> {
 
       const title = meta["title"] ?? nestedMeta["title"] ?? "";
       const company = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
-      const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+      const storedLinkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+      // Fall back to a name-based search URL when no direct profile URL is stored,
+      // consistent with _fetchProspectContacts. This ensures the LinkedIn button
+      // is always available in the Sent tab too.
+      const linkedinUrl = storedLinkedinUrl ||
+        `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name)}`;
 
       const outreachStageMeta = meta["outreach_stage"] ?? "cold";
       const validStages: OutreachStage[] = ["cold", "touched_1", "touched_2", "touched_3", "responded"];

@@ -290,14 +290,14 @@ export default function OutreachTaskCard({ task, message, onMarkSent, onUnmarkSe
                 </span>
                 {/* Outreach stage badge */}
                 <StageBadge stage={stage} />
-                {/* LinkedIn profile button — only for direct profile URLs, not search fallbacks */}
-                {contact.linkedinUrl && !contact.linkedinUrl.includes("linkedin.com/search") && (
+                {/* LinkedIn button — shows for any URL (direct profile or name-based search fallback) */}
+                {contact.linkedinUrl && (
                   <a
                     href={contact.linkedinUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title="Open LinkedIn profile"
-                    aria-label="Open LinkedIn profile"
+                    title={contact.linkedinUrl.includes("linkedin.com/search") ? "Search LinkedIn for this person" : "Open LinkedIn profile"}
+                    aria-label={contact.linkedinUrl.includes("linkedin.com/search") ? "Search LinkedIn for this person" : "Open LinkedIn profile"}
                     className="inline-flex items-center justify-center w-6 h-6 rounded hover:opacity-80 transition-opacity shrink-0"
                   >
                     <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" xmlns="http://www.w3.org/2000/svg">
