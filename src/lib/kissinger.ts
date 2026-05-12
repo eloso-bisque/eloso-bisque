@@ -1107,9 +1107,11 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
           ? (outreachStageMeta as OutreachStage)
           : "cold";
 
-        // LinkedIn URL from stored meta only; no search URL fallback.
+        // LinkedIn URL from stored meta; fall back to a people-search URL constructed
+        // from the contact's name when no direct profile URL is stored.
         const storedLinkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
-        const linkedinUrl = storedLinkedinUrl;
+        const linkedinUrl = storedLinkedinUrl ||
+          `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name)}`;
 
         const outreachMessage = meta["outreach_message"] ?? undefined;
         const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;

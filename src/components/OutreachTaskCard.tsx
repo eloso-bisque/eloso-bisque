@@ -290,8 +290,8 @@ export default function OutreachTaskCard({ task, message, onMarkSent, onUnmarkSe
                 </span>
                 {/* Outreach stage badge */}
                 <StageBadge stage={stage} />
-                {/* LinkedIn profile button */}
-                {contact.linkedinUrl && (
+                {/* LinkedIn profile button — only for direct profile URLs, not search fallbacks */}
+                {contact.linkedinUrl && !contact.linkedinUrl.includes("linkedin.com/search") && (
                   <a
                     href={contact.linkedinUrl}
                     target="_blank"
