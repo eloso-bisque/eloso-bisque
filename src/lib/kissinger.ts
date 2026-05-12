@@ -1107,11 +1107,9 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
           ? (outreachStageMeta as OutreachStage)
           : "cold";
 
-        // LinkedIn URL from stored meta; for LinkedIn CSV contacts without a stored URL,
-        // construct a search URL from name so the icon/button is still usable.
+        // LinkedIn URL from stored meta only; no search URL fallback.
         const storedLinkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
-        const linkedinUrl = storedLinkedinUrl ||
-          `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name)}`;
+        const linkedinUrl = storedLinkedinUrl;
 
         const outreachMessage = meta["outreach_message"] ?? undefined;
         const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;

@@ -126,21 +126,21 @@ export default function OutreachPageClient({
 
   /**
    * Return a usable LinkedIn URL for a contact, or null if none is available.
-   * Accepts both real profile URLs and search URLs (search URLs are useful for
-   * the "Open Next 8" batch workflow when no direct profile URL is stored).
+   * Only returns direct profile URLs — search URLs are rejected.
    */
   function getLinkedinUrl(contact: { linkedinUrl?: string }): string | null {
     if (!contact.linkedinUrl) return null;
     const u = contact.linkedinUrl;
+    if (u.includes("linkedin.com/search")) return null;
     return u.startsWith("http") ? u : `https://${u}`;
   }
 
-  // Include contacts that have any LinkedIn URL (real profile or search URL fallback).
+  // Include contacts that have a direct LinkedIn profile URL (no search URL fallbacks).
   const linkedinContacts = queueTasks
     .map((t) => t.contact)
     .filter((c) => getLinkedinUrl(c) !== null);
 
-  // totalWithLinkedin = contacts with any usable LinkedIn URL (profile or search fallback)
+  // totalWithLinkedin = contacts with a direct LinkedIn profile URL
   const totalWithLinkedin = linkedinContacts.length;
   const exhausted = batchOffset >= totalWithLinkedin;
   const nextBatch = linkedinContacts.slice(batchOffset, batchOffset + BATCH_SIZE);
