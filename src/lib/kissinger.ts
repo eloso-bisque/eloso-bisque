@@ -902,6 +902,19 @@ function isTitleExcluded(title: string | undefined): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Ben's supply/procurement title filter
+// Per Ben's request: only show contacts with "supply" or "procurement" in their
+// current job title. Applied in fetchProspectContacts when assignee === "ben".
+// ---------------------------------------------------------------------------
+
+const SUPPLY_PROCUREMENT_PATTERNS = [/\bsupply\b/i, /\bprocurement\b/i];
+
+function hasSupplyOrProcurement(title: string | undefined): boolean {
+  if (!title) return false;
+  return SUPPLY_PROCUREMENT_PATTERNS.some((p) => p.test(title));
+}
+
+// ---------------------------------------------------------------------------
 // Outreach: fetch prospect contacts with org context
 // ---------------------------------------------------------------------------
 
@@ -1154,6 +1167,11 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
         // (these should be cleaned up by reload-tasks / bulk cleanup, but filter
         // here defensively in case any slip through)
         if (!isTitleExcluded(r.value.title)) {
+          // Ben's quality filter: only show contacts with "supply" or "procurement"
+          // in their current job title. Requested by Ben to improve lead quality.
+          if (assignee === "ben" && !hasSupplyOrProcurement(r.value.title)) {
+            continue;
+          }
           results.push(r.value);
         }
       }
