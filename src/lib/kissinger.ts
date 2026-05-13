@@ -1435,7 +1435,12 @@ async function _fetchSignalContacts(): Promise<ProspectContactRaw[]> {
 
       const title = meta["title"] ?? nestedMeta["title"] ?? "";
       const company = meta["company"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
-      const linkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+      const storedLinkedinUrl = meta["linkedin_url"] ?? meta["linkedin"] ?? nestedMeta["linkedin_url"] ?? nestedMeta["linkedin"] ?? "";
+      // Fall back to a name-based search URL when no direct profile URL is stored,
+      // consistent with _fetchProspectContacts. This ensures the Engage button always
+      // appears on signal cards even for Trigify-discovered entities that lack a stored URL.
+      const linkedinUrl = storedLinkedinUrl ||
+        `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name)}`;
 
       const signalDismissed = meta["signal_dismissed"] === "true";
       const signalSnoozedUntil = meta["signal_snoozed_until"] ?? undefined;
