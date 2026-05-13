@@ -1072,7 +1072,14 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
           }
         }
 
-        const title = meta["title"] ?? nestedMeta["title"] ?? "";
+        // Title resolution: check direct meta first, then nested JSON blob.
+        // "headline" is used by some LinkedIn-sourced contacts in lieu of "title".
+        const title =
+          meta["title"] ??
+          nestedMeta["title"] ??
+          meta["headline"] ??
+          nestedMeta["headline"] ??
+          "";
         // company will be resolved after the org fetch (org name is the authoritative fallback)
         const companyFromMeta = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
 

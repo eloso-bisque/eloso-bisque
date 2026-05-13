@@ -11,7 +11,8 @@
  *   1. Verify auth (session cookie or internal secret)
  *   2. Determine assignee from the session cookie (drew/ben/jake)
  *   3. Fetch ALL cold person entities NOT tagged "queue:*" (the global pool)
- *   4. Filter out: prospect-skipped, outreach-sent, COO titles, non-US (for Tier 2)
+ *   4. Filter out: prospect-skipped, outreach-sent, COO titles, non-US (for Tier 2),
+ *      and for Ben: contacts without "supply" or "procurement" in their title
  *   5. Score by sector affinity (contacts matching this user's SECTOR_PREFERENCE go first)
  *   6. Pick top BATCH_SIZE candidates
  *   7. Add "prospect-contact" + "queue:<assignee>" tags via Kissinger mutation
@@ -118,6 +119,15 @@ const COO_TITLE_PATTERNS = [
 function isCOOTitle(title: string | undefined): boolean {
   if (!title) return false;
   return COO_TITLE_PATTERNS.some((p) => p.test(title));
+}
+
+// Ben's hard queue filter: only supply/procurement contacts enter queue:ben.
+// Applied at queue-add time so no non-supply contacts ever land in his queue.
+const SUPPLY_PROCUREMENT_PATTERNS = [/\bsupply\b/i, /\bprocurement\b/i];
+
+function hasSupplyOrProcurementTitle(title: string | undefined): boolean {
+  if (!title) return false;
+  return SUPPLY_PROCUREMENT_PATTERNS.some((p) => p.test(title));
 }
 
 function titleMatches(title: string, keywords: string[]): boolean {
@@ -309,9 +319,10 @@ export async function POST(request: Request) {
     // Fetch meta for a buffer of top candidates so we can apply COO + excluded-title
     // filtering before final selection. The summary query (fetchAllEntities) does NOT
     // include meta fields — p.meta is always undefined there — so we must do a
-    // per-entity meta fetch here. We fetch 3× BATCH_SIZE to ensure we have enough
-    // candidates after filtering.
-    const FETCH_BUFFER = BATCH_SIZE * 3;
+    // per-entity meta fetch here.
+    // For Ben we apply an additional supply/procurement filter, so we need a larger
+    // buffer to ensure BATCH_SIZE contacts remain after filtering.
+    const FETCH_BUFFER = assignee === "ben" ? BATCH_SIZE * 10 : BATCH_SIZE * 3;
     const candidateBuffer = candidates.slice(0, FETCH_BUFFER);
     const bufferMeta = await Promise.all(
       candidateBuffer.map(async (p) => ({
@@ -323,9 +334,23 @@ export async function POST(request: Request) {
     const excludedTitles = criteria?.excluded_titles ?? [];
     const filteredCandidates = bufferMeta
       .filter(({ meta }) => {
-        const title = meta.find((m) => m.key === "title")?.value ?? "";
+        const rawTitle = meta.find((m) => m.key === "title")?.value ?? "";
+        // Also check nested JSON meta blob (Apollo-enriched contacts store title there)
+        let nestedTitle = "";
+        const nestedMetaRaw = meta.find((m) => m.key === "meta")?.value;
+        if (nestedMetaRaw) {
+          try {
+            const parsed = JSON.parse(nestedMetaRaw) as Record<string, string>;
+            nestedTitle = parsed["title"] ?? parsed["headline"] ?? "";
+          } catch {
+            // not JSON — ignore
+          }
+        }
+        const title = rawTitle || nestedTitle;
         if (isCOOTitle(title)) return false;
         if (excludedTitles.length > 0 && titleMatches(title, excludedTitles)) return false;
+        // Hard filter for Ben: only allow contacts with supply/procurement in their title
+        if (assignee === "ben" && !hasSupplyOrProcurementTitle(title)) return false;
         return true;
       })
       .map(({ person }) => person);
