@@ -281,11 +281,12 @@ export async function POST(request: Request) {
       if (p.tags.includes("prospect-skipped")) return false;
       if (p.tags.includes("outreach-sent")) return false;
       // Must have a valid provenance tier
-      const isHumanSource = p.tags.includes("source:human");
+      const isLinkedIn = p.tags.includes("linkedin");
+      const isHumanSource = p.tags.includes("source:human") || isLinkedIn;
       const isTier1 = isHumanSource || p.tags.includes("source:csv");
       const isTier2 = p.tags.includes("pipeline-contact");
       if (!isTier1 && !isTier2) return false;
-      // Location filter: Tier 2 must be US; Tier 1 source:human bypasses the check
+      // Location filter: Tier 2 must be US; Tier 1 source:human (incl. LinkedIn) bypasses the check
       if (!isHumanSource && !isUSContact(p)) return false;
       return true;
     });

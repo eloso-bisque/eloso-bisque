@@ -221,10 +221,11 @@ export async function POST(request: Request) {
     // These are personally known contacts — excluding them based on a location
     // heuristic is wrong. Only apply isUSContact to pipeline-contact (Tier 2).
     const isProvenanceEligible = (person: (typeof allPeople)[number]): boolean => {
-      const isHumanSource = person.tags.includes("source:human");
+      const isLinkedIn = person.tags.includes("linkedin");
+      const isHumanSource = person.tags.includes("source:human") || isLinkedIn;
       const isTier1 = isHumanSource || person.tags.includes("source:csv");
       const isTier2 = person.tags.includes("pipeline-contact");
-      // Tier 1 source:human contacts bypass the US location filter
+      // Tier 1 source:human (incl. LinkedIn) contacts bypass the US location filter
       const passesLocationFilter = isHumanSource || isUSContact(person);
       return (
         (isTier1 || isTier2) &&
@@ -270,8 +271,8 @@ export async function POST(request: Request) {
     // Sort by provenance tier first: Tier 1 (source:human / source:csv) before Tier 2 (pipeline-contact).
     // Within the same tier, order is stable (insertion order from Kissinger).
     candidates.sort((a, b) => {
-      const aTier1 = a.tags.includes("source:human") || a.tags.includes("source:csv") ? 0 : 1;
-      const bTier1 = b.tags.includes("source:human") || b.tags.includes("source:csv") ? 0 : 1;
+      const aTier1 = a.tags.includes("source:human") || a.tags.includes("source:csv") || a.tags.includes("linkedin") ? 0 : 1;
+      const bTier1 = b.tags.includes("source:human") || b.tags.includes("source:csv") || b.tags.includes("linkedin") ? 0 : 1;
       return aTier1 - bTier1;
     });
 

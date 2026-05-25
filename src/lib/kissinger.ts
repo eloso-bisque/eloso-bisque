@@ -77,6 +77,8 @@ export interface EntitySummary {
   archived: boolean;
   /** Location extracted from meta["location"] — available on all list queries */
   location?: string | null;
+  /** Job title extracted from meta["title"] — available on all list queries */
+  title?: string | null;
   /** Inline meta fields — only available on EntityGql (single-entity queries), not list queries */
   meta?: { key: string; value: string }[];
   /** Inline notes — only available on EntityGql (single-entity queries), not list queries */
@@ -337,6 +339,7 @@ const CONTACTS_PAGE_QUERY = `
           updatedAt
           archived
           location
+          title
         }
       }
     }

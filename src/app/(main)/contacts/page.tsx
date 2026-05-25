@@ -611,7 +611,7 @@ function MobileContactList({ contacts }: { contacts: EntitySummary[] }) {
     <>
       {contacts.map((contact) => {
         const company = getMeta(contact, "company");
-        const title = getMeta(contact, "title");
+        const title = contact.title ?? getMeta(contact, "title");
         const industry = getMeta(contact, "industry");
         const location = getMeta(contact, "location");
         const displayTitle = title ?? (contact.kind === "org" ? industry : undefined);
@@ -726,7 +726,7 @@ function ContactsTable({
         <tbody>
           {contacts.map((contact, i) => {
             const company = getMeta(contact, "company");
-            const title = getMeta(contact, "title");
+            const title = contact.title ?? getMeta(contact, "title");
             const lastSignalDate = getMeta(contact, "last_signal_date");
             const displayTags = contact.tags.filter(
               (t) => !["eloso", "prospect-contact"].includes(t)
