@@ -41,6 +41,7 @@ function mapContact(raw: ProspectContactRaw): ProspectContact {
     signalSnoozedUntil: raw.signalSnoozedUntil,
     lastSignalKeyword: raw.lastSignalKeyword,
     lastSignalUrl: raw.lastSignalUrl,
+    queueOwner: raw.queueOwner,
   };
 }
 
@@ -80,21 +81,30 @@ async function OutreachContent({ currentMember }: { currentMember: TeamMember | 
     });
 
   // Sent contacts come from the outreach-sent tag (disjoint from prospect-contact).
-  // Scope to the logged-in user: show contacts where outreachMessageSender matches
-  // the current user (case-insensitive), plus any contacts with no sender recorded
-  // (contacts marked sent before sender attribution was added, or marked sent without
-  // going through the generate-message flow). Unattributed contacts are shown to all
-  // users since we cannot determine who sent them.
+  // Scope to the logged-in user using a two-signal attribution strategy:
+  //   1. outreachMessageSender (set when the message was generated via AI/template)
+  //   2. queueOwner (derived from the queue:* tag on the entity — always present for
+  //      contacts that went through a user's personal queue)
+  // A contact is shown to the current user if EITHER signal matches them.
+  // A contact with NO attribution signal at all (no sender, no queue tag) is shown
+  // to all users as a fallback — these are rare edge cases from before queue scoping.
   const allSentMapped: ProspectContact[] = rawSentContacts.map(mapContact);
   const sentContacts: ProspectContact[] = allSentMapped.filter((c) => {
     if (!currentMember) {
       // Unauthenticated: show all sent contacts (fallback)
       return true;
     }
-    // No sender recorded — show to all users (unattributed, can't scope to one person)
-    if (!c.outreachMessageSender) return true;
-    // Sender recorded — only show to the matching user
-    return c.outreachMessageSender.toLowerCase() === currentMember.toLowerCase();
+    const memberLower = currentMember.toLowerCase();
+    // Signal 1: explicit sender attribution
+    if (c.outreachMessageSender) {
+      return c.outreachMessageSender.toLowerCase() === memberLower;
+    }
+    // Signal 2: queue owner (the user this contact was assigned to)
+    if (c.queueOwner) {
+      return c.queueOwner.toLowerCase() === memberLower;
+    }
+    // No attribution signal — show to all users (truly unattributed, extremely rare)
+    return true;
   });
 
   // Signal contacts: from Trigify signal entities (fetched separately) +

@@ -46,6 +46,12 @@ export interface ProspectContact {
   lastSignalUrl?: string;
   /** True if the contact has a warm intro path (from kissinger introPath query) */
   hasIntroPath?: boolean;
+  /**
+   * The team member this contact is/was queued for (extracted from queue:* tag).
+   * Lowercase: "ben", "drew", "jake", or undefined.
+   * Used by the Sent tab to attribute contacts that have no outreachMessageSender.
+   */
+  queueOwner?: string;
 }
 
 export interface OutreachTask {

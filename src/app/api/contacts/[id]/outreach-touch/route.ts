@@ -40,6 +40,7 @@ async function gqlMutate<T = unknown>(
     headers,
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
+    signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) {
     throw new Error(`Kissinger request failed: ${res.status} ${res.statusText}`);

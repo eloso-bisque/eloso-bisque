@@ -958,6 +958,13 @@ export interface ProspectContactRaw {
   lastSignalKeyword?: string;
   /** URL of the specific LinkedIn post that triggered the signal (meta.last_signal_url) */
   lastSignalUrl?: string;
+  /**
+   * The team member this contact is/was queued for (extracted from queue:* tag).
+   * Set on sent contacts so the Sent tab can scope correctly even when
+   * outreachMessageSender is absent (contacts sent before sender attribution).
+   * Lowercase: "ben", "drew", "jake", or undefined if no queue tag present.
+   */
+  queueOwner?: string;
 }
 
 const PROSPECT_CONTACT_QUERY = `
@@ -1289,6 +1296,11 @@ async function _fetchSentContacts(): Promise<ProspectContactRaw[]> {
       const outreachMessageGeneratedAt = meta["outreach_message_generated_at"] ?? undefined;
       const outreachMessageSender = meta["outreach_message_sender"] ?? undefined;
 
+      // Extract queue owner from tags (queue:ben, queue:drew, queue:jake).
+      // Used by the Sent tab filter as a fallback when outreachMessageSender is absent.
+      const queueTag = person.tags.find((t) => t.startsWith("queue:"));
+      const queueOwner = queueTag ? queueTag.slice("queue:".length) : undefined;
+
       return {
         id: person.id,
         name: person.name,
@@ -1303,6 +1315,7 @@ async function _fetchSentContacts(): Promise<ProspectContactRaw[]> {
         outreachMessage,
         outreachMessageGeneratedAt,
         outreachMessageSender,
+        queueOwner,
       } satisfies ProspectContactRaw;
     }
 
