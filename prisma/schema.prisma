@@ -1,0 +1,720 @@
+// ============================================================
+// datasource + generator
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// Enums
+// ============================================================
+
+/// Outreach cadence stage for a prospect contact.
+/// Progresses linearly: cold → touched_1 → touched_2 → touched_3 → responded.
+/// Contacts in state "responded" never re-enter the cold queue.
+enum OutreachStage {
+  cold
+  touched_1
+  touched_2
+  touched_3
+  responded
+}
+
+/// Sales funnel stage for prospect organizations (Kanban board).
+enum FunnelStage {
+  Identified
+  Researched
+  Contacted
+  Engaged
+  MeetingBooked
+  ProposalSent
+  ClosedNurture
+}
+
+/// Fundraising pipeline stage for investor firms.
+enum InvestorPipelineStage {
+  Research
+  WarmIntro
+  FirstMeeting
+  PartnerMeeting
+  TermSheet
+  Closed
+  Passed
+}
+
+/// ICP / investor fit tier — human-readable bucketing of computed scores.
+enum FitTier {
+  high
+  medium
+  low
+}
+
+/// Message angle — determines which value proposition framing is used.
+enum MessageAngle {
+  vision      // Ben (CEO) — market timing, big picture
+  technical   // Drew (CTO) — implementation, integration
+  strategic   // Jake (COO/CFO) — business outcomes, ROI
+}
+
+/// Response type when a prospect replies to outreach.
+enum ResponseType {
+  Interested
+  NotNow
+  WrongPerson
+  NoReply
+  Bounced
+}
+
+/// Contact event / CRM interaction kinds.
+enum ContactEventKind {
+  Note
+  Meeting
+  Email
+  Call
+  Custom
+}
+
+/// Activity event types for the Activity Dashboard.
+enum ActivityEventType {
+  Login
+  OutreachTouchSent
+  BatchPulled
+  ResponseLogged
+  ContactEnriched
+}
+
+/// Relationship types between entities.
+enum RelationType {
+  works_at
+  knows
+  funded_by
+  part_of
+  works_on
+  ally
+  champion
+  advisor
+  sponsor
+  board_member
+  referred_by
+}
+
+/// Signal action a user has taken on a Trigify signal.
+enum SignalAction {
+  snoozed
+  dismissed
+  engaged
+}
+
+// ============================================================
+// User — internal team members (Ben, Jake, Drew)
+// Previously split across Vercel KV (auth) + SQLite (activity)
+// ============================================================
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  /// Outreach sector affinity — drives default queue assignment.
+  /// e.g. ["defense", "evtol"] for Ben
+  sectorAffinity String[] @default([])
+  /// Message angle assigned to this user for outreach generation.
+  messageAngle MessageAngle
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  queueEntries     OutreachQueueEntry[]
+  outreachTouches  OutreachTouch[]
+  activityLogs     ActivityLog[]
+  passwordResets   PasswordResetToken[]
+}
+
+// ============================================================
+// PasswordResetToken — for forgot-password flow
+// ============================================================
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// Organization — prospect companies and VC firms
+// Previously: Kissinger entity (kind=org) with tags + meta[]
+// ============================================================
+
+model Organization {
+  id          String  @id @default(cuid())
+  /// Display name
+  name        String
+  /// External identifier from the original Kissinger graph (for migration cross-reference)
+  kissingerId String? @unique
+
+  // Classification — mutually exclusive; an org is either a prospect or a VC firm.
+  isProspect  Boolean @default(false)
+  isVcFirm    Boolean @default(false)
+  isArchived  Boolean @default(false)
+
+  // Common fields
+  website     String?
+  hq          String?   // "Austin, TX" — freeform location string
+  notes       String?
+  logoUrl     String?
+
+  // Prospect-specific fields
+  industry    String?   // e.g. "Aerospace & Defense"
+  /// Primary sector slug — drives sector heatmap and assignment routing
+  sectorPrimary String?
+  employees   Int?
+  /// Revenue as a float in USD (store normalised; display formatted)
+  revenueUsd  Float?
+  /// ICP score 0–100, stored after computation so listing queries can sort/filter
+  icpScore    Float?
+  /// Fit tier derived from icpScore
+  fitTier     FitTier?
+  /// Known number of suppliers in the graph (used for supply chain complexity scoring)
+  knownSuppliers Int @default(0)
+  /// Known number of customers in the graph
+  knownCustomers Int @default(0)
+  /// Apollo market size estimate for this sector (from Apollo data)
+  apolloMarketSize Float?
+  /// Sales funnel stage on the Kanban board
+  funnelStage FunnelStage @default(Identified)
+  funnelStageUpdatedAt DateTime?
+
+  // VC-firm-specific fields
+  /// Investment stage focus: "seed", "series-a", etc. (stored as freeform string
+  /// because the taxonomy varies widely; enum would be too rigid)
+  investmentStage  String?
+  checkSize        String?   // "$500K–$3M" — kept as formatted string per existing UI
+  thesis           String?
+  sectorFit        String?   // freeform notes on sector alignment
+  investorPipeline InvestorPipelineStage @default(Research)
+  investorPipelineUpdatedAt DateTime?
+  /// Investor fit score 0–100
+  investorFitScore Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  contacts      Contact[]           // people who work here
+  sectors       OrganizationSector[] // many-to-many sector tags
+  tags          OrganizationTag[]
+  relationshipsTo   RelationshipFrom[] @relation("RelationshipTarget")
+  relationshipsFrom RelationshipFrom[] @relation("RelationshipSourceOrg")
+  queueEntries  OutreachQueueEntry[]
+
+  @@index([isProspect, isArchived])
+  @@index([isVcFirm, isArchived])
+  @@index([sectorPrimary])
+  @@index([funnelStage])
+  @@index([investorPipeline])
+  @@index([icpScore])
+}
+
+// ============================================================
+// Contact — individual people (prospect contacts, investor contacts, etc.)
+// Previously: Kissinger entity (kind=person) with tags + meta[]
+// ============================================================
+
+model Contact {
+  id          String  @id @default(cuid())
+  name        String
+  /// External identifier from the original Kissinger graph
+  kissingerId String? @unique
+
+  // Identity
+  email       String?
+  linkedinUrl String?
+  /// Date the team member connected with this person on LinkedIn (ISO date string)
+  linkedinConnectedOn String?
+  title       String?
+  /// Freeform location string from their LinkedIn profile
+  location    String?
+
+  // Classification
+  isProspectContact Boolean @default(false)
+  isInvestorContact Boolean @default(false)
+  isArchived        Boolean @default(false)
+
+  // Employer
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  /// Role at the organization (extracted from works_at edge notes in Kissinger)
+  roleAtOrg     String?
+  /// Connection strength to the employer org (0.0–1.0)
+  orgStrength   Float?
+
+  // Notes
+  notes       String?
+
+  // Scores
+  /// Eloso Fit Score 0–100 (contact-level)
+  fitScore    Float?
+  fitTier     FitTier?
+  /// Investor Fit Score 0–100 (for investor contacts)
+  investorFitScore Float?
+
+  // Outreach stage — the contact's current position in the outreach cadence.
+  // This is the authoritative stage value; OutreachQueueEntry also tracks
+  // assignment-level metadata, but stage lives on the contact.
+  outreachStage OutreachStage @default(cold)
+
+  // Signal tracking (Trigify)
+  lastSignalDate     DateTime?
+  lastSignalKeyword  String?
+  lastSignalUrl      String?
+  signalDismissed    Boolean  @default(false)
+  signalSnoozedUntil DateTime?
+
+  // Investor-specific fields
+  /// Inferred or explicit incentive description for investor contacts
+  incentive        String?
+  /// Warm intro path description (freeform notes on how to get introduced)
+  warmIntroPath    String?
+  /// Investor priority: "high", "medium", "low" (freeform for now; could be enum)
+  priority         String?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  tags              ContactTag[]
+  queueEntries      OutreachQueueEntry[]
+  touches           OutreachTouch[]
+  responses         OutreachResponse[]
+  generatedMessages GeneratedMessage[]
+  signals           Signal[]
+  events            ContactEvent[]
+  bookings          Booking[]
+  relationshipsFrom RelationshipFrom[] @relation("RelationshipSourcePerson")
+  relationshipsTo   RelationshipFrom[] @relation("RelationshipTargetPerson")
+
+  @@index([isProspectContact, isArchived, outreachStage])
+  @@index([isInvestorContact, isArchived])
+  @@index([organizationId])
+  @@index([lastSignalDate])
+  @@index([fitScore])
+}
+
+// ============================================================
+// Tagging — explicit join tables for contact and org tags.
+// Replaces the free-form string tags array on Kissinger entities.
+//
+// Rationale: keeping tags as a join table (vs. String[] column) allows:
+//   - Querying "all contacts with tag X" efficiently via an index
+//   - Future tag normalization (canonical tag registry)
+//   - Tag history/audit if needed
+//
+// For now the tag value is a plain string (no foreign key to a Tag master table)
+// to keep migration simple. A tag normalization pass can follow.
+// ============================================================
+
+model ContactTag {
+  contactId String
+  tag       String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tag])
+  @@index([tag])
+}
+
+model OrganizationTag {
+  organizationId String
+  tag            String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, tag])
+  @@index([tag])
+}
+
+// ============================================================
+// Sector — named industry verticals used for routing and heatmap.
+// Previously: free-form tags like "defense", "evtol", "rail-transportation-equipment"
+// ============================================================
+
+model Sector {
+  slug        String @id   // e.g. "defense-aerospace", "rail-transportation-equipment"
+  displayName String       // e.g. "Aerospace & Defense", "Rail & Transportation"
+  /// Which team member is the default assignee for contacts in this sector
+  defaultAssignee String?  // "Ben" | "Jake" | "Drew"
+  /// Apollo market size for this sector (for the heatmap tile)
+  apolloMarketSize Float?
+
+  organizations OrganizationSector[]
+
+  @@index([defaultAssignee])
+}
+
+/// Many-to-many: an org can be in multiple sectors.
+model OrganizationSector {
+  organizationId String
+  sectorSlug     String
+  /// Whether this is the primary sector (used for sector_primary routing)
+  isPrimary      Boolean @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sector       Sector       @relation(fields: [sectorSlug], references: [slug], onDelete: Cascade)
+
+  @@id([organizationId, sectorSlug])
+  @@index([sectorSlug])
+}
+
+// ============================================================
+// Relationship — typed edges between entities.
+// Replaces Kissinger graph edges (works_at, knows, funded_by, etc.)
+//
+// Design note: A single RelationshipFrom table covers person→person,
+// person→org, and org→org edges. The source and target are typed
+// separately to allow the DB to enforce integrity without a
+// polymorphic join. We use two nullable FKs (sourcePerson/sourceOrg,
+// targetPerson/targetOrg) with a CHECK constraint (enforced at app
+// layer in Prisma) that exactly one source and one target is set.
+//
+// For intro path BFS traversal, a recursive CTE on this table is
+// far more efficient than Kissinger's full graph scan.
+// ============================================================
+
+model RelationshipFrom {
+  id           String       @id @default(cuid())
+  relationType RelationType
+
+  // Exactly one of sourcePersonId or sourceOrgId is set
+  sourcePersonId String?
+  sourceOrgId    String?
+  sourcePerson   Contact?      @relation("RelationshipSourcePerson", fields: [sourcePersonId], references: [id], onDelete: Cascade)
+  sourceOrg      Organization? @relation("RelationshipSourceOrg", fields: [sourceOrgId], references: [id], onDelete: Cascade)
+
+  // Exactly one of targetPersonId or targetOrgId is set
+  targetPersonId String?
+  targetOrgId    String?
+  targetPerson   Contact?      @relation("RelationshipTargetPerson", fields: [targetPersonId], references: [id], onDelete: Cascade)
+  targetOrg      Organization? @relation("RelationshipTarget", fields: [targetOrgId], references: [id], onDelete: Cascade)
+
+  /// Connection strength 0.0–1.0 (from Kissinger edge strength)
+  strength Float   @default(0.5)
+  /// Freeform context (e.g. role description from edge notes)
+  notes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sourcePersonId, relationType])
+  @@index([sourceOrgId, relationType])
+  @@index([targetPersonId, relationType])
+  @@index([targetOrgId, relationType])
+  @@index([relationType])
+}
+
+// ============================================================
+// OutreachQueueEntry — a contact assigned to a user's outreach queue.
+//
+// Previously modeled as: tag "queue:drew" on the contact entity.
+//
+// One row = one assignment. A contact can only be in one user's
+// queue at a time (enforced by unique constraint on contactId).
+// Re-assignment creates a new row (old row is deactivated via isActive).
+//
+// Key invariant: at most ONE active queue entry per contact at any time.
+// The "New Batch" operation creates N new rows for the calling user.
+// The "Skip" action soft-deletes the row (isActive=false) without
+// recording a touch.
+// ============================================================
+
+model OutreachQueueEntry {
+  id         String   @id @default(cuid())
+  contactId  String
+  userId     String
+  /// The organization this contact belongs to (denormalized for list queries)
+  organizationId String?
+
+  isActive   Boolean  @default(true)
+  /// Why the entry was deactivated, if applicable
+  deactivatedReason String? // "skipped" | "sent" | "responded" | "reassigned"
+
+  /// Snapshot of the contact's outreach stage at assignment time
+  stageAtAssignment OutreachStage @default(cold)
+  /// Current stage (mirrors Contact.outreachStage; kept here for queue-level queries)
+  currentStage      OutreachStage @default(cold)
+
+  assignedAt   DateTime @default(now())
+  deactivatedAt DateTime?
+  updatedAt    DateTime @updatedAt
+
+  contact      Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
+  touches      OutreachTouch[]
+
+  // At most one active entry per contact
+  @@unique([contactId, isActive], name: "unique_active_assignment")
+  @@index([userId, isActive, currentStage])
+  @@index([userId, isActive])
+  @@index([contactId])
+}
+
+// ============================================================
+// OutreachTouch — a single sent outreach message (T1, T2, T3).
+//
+// Previously: outreach_stage meta field advanced on the entity; no
+// individual touch record existed. This makes it impossible to query
+// "how many touches did Drew send today" without scanning all contacts.
+//
+// One row = one message sent. The touchNumber (1, 2, 3) corresponds
+// to the T1/T2/T3 cadence. The message body at time of send is stored
+// here for historical fidelity (generated messages may be regenerated).
+// ============================================================
+
+model OutreachTouch {
+  id              String   @id @default(cuid())
+  contactId       String
+  queueEntryId    String?
+  userId          String   // who sent it
+  touchNumber     Int      // 1, 2, or 3
+  /// The message text as actually sent (snapshot)
+  messageBody     String?
+  /// Reference to the stored GeneratedMessage (if AI-generated)
+  generatedMessageId String?
+  /// The angle used for this message
+  angle           MessageAngle?
+  /// Stage before this touch
+  stageBeforeTouch OutreachStage
+  /// Stage after this touch (advanced by mutation)
+  stageAfterTouch  OutreachStage
+  sentAt          DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  contact          Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  queueEntry       OutreachQueueEntry? @relation(fields: [queueEntryId], references: [id])
+  user             User                @relation(fields: [userId], references: [id])
+  generatedMessage GeneratedMessage?   @relation(fields: [generatedMessageId], references: [id])
+
+  @@index([contactId])
+  @@index([userId, sentAt])
+  @@index([sentAt])
+}
+
+// ============================================================
+// OutreachResponse — a prospect's response to outreach.
+//
+// Previously: "responded" stage encoded in meta; no response type
+// or notes stored. The response type (Interested, NotNow, etc.)
+// determines the next action in the sales workflow.
+// ============================================================
+
+model OutreachResponse {
+  id           String       @id @default(cuid())
+  contactId    String
+  userId       String?      // who logged the response (null = system)
+  responseType ResponseType
+  notes        String?
+  respondedAt  DateTime     @default(now())
+  createdAt    DateTime     @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@index([responseType])
+  @@index([respondedAt])
+}
+
+// ============================================================
+// GeneratedMessage — AI-generated or template-based outreach messages.
+//
+// Previously: outreach_message + outreach_message_generated_at +
+// outreach_message_sender stored as meta fields on the person entity.
+// Only ONE message per contact existed (last generated wins).
+//
+// Now: each generation creates a new row. The contact's current
+// "active" message is the most recent non-superseded row.
+// Message versioning enables A/B analysis and regeneration auditing.
+// ============================================================
+
+model GeneratedMessage {
+  id          String       @id @default(cuid())
+  contactId   String
+  /// Which team member's angle/persona this was generated for
+  angle       MessageAngle
+  /// "ai" or "template"
+  generationMethod String   @default("template")
+  /// The model used for AI generation (e.g. "claude-opus-4-5")
+  modelId     String?
+  messageBody String
+  /// Whether this is the currently active message for this contact+angle combo
+  isActive    Boolean      @default(true)
+  generatedAt DateTime     @default(now())
+  createdAt   DateTime     @default(now())
+
+  contact Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  touches OutreachTouch[]
+
+  @@index([contactId, angle, isActive])
+  @@index([contactId, isActive])
+}
+
+// ============================================================
+// Signal — Trigify LinkedIn post engagement signals.
+//
+// Previously: last_signal_date, last_signal_keyword, last_signal_url,
+// signal_dismissed, signal_snoozed_until stored as meta fields — only
+// the MOST RECENT signal was surfaced. Full signal history was visible
+// only as Kissinger "interactions" created by the trigify-sync job.
+//
+// Now: each signal is a row. The Outreach Signals tab queries for
+// signals within the last 14 days where action != dismissed.
+// ============================================================
+
+model Signal {
+  id          String   @id @default(cuid())
+  contactId   String
+  keyword     String
+  postUrl     String?
+  /// Excerpt of the LinkedIn post content
+  postSnippet String?
+  signalDate  DateTime
+
+  // User action on this signal
+  action       SignalAction?
+  actionBy     String?      // userId
+  snoozedUntil DateTime?
+  actionAt     DateTime?
+
+  createdAt DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, signalDate])
+  @@index([signalDate])
+  @@index([action])
+}
+
+// ============================================================
+// ContactEvent — CRM interaction timeline (meetings, calls, emails, notes).
+//
+// Previously: Kissinger "interactions" with kind/occurredAt/subject/notes.
+// These are not outreach touches — they are logged CRM events.
+// ============================================================
+
+model ContactEvent {
+  id         String           @id @default(cuid())
+  contactId  String
+  kind       ContactEventKind
+  notes      String?
+  subject    String?
+  occurredAt DateTime
+  /// User who logged the event (null = system/import)
+  loggedBy   String?
+  createdAt  DateTime         @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, occurredAt])
+}
+
+// ============================================================
+// ActivityLog — queryable replacement for Vercel KV activity counters.
+//
+// Previously: kv.incr("outreach:sent:drew:2026-05-25") per day.
+// Now: one row per event, with full metadata.
+//
+// This enables:
+//   - SELECT COUNT(*) WHERE userId=X AND eventType=OutreachTouchSent AND createdAt > 7d
+//   - 7-day heatmap via GROUP BY DATE(createdAt)
+//   - All-time totals
+//   - Per-contact, per-user, per-week breakdowns
+// ============================================================
+
+model ActivityLog {
+  id        String            @id @default(cuid())
+  userId    String
+  eventType ActivityEventType
+  /// Optional reference to the contact involved (for outreach events)
+  contactId String?
+  /// Free-form metadata bag for event-specific details (small, not replacing typed fields)
+  metadata  Json?
+  createdAt DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, eventType, createdAt])
+  @@index([eventType, createdAt])
+  @@index([createdAt])
+}
+
+// ============================================================
+// Booking system — adapted from SQLite schema to Prisma/Postgres.
+// The logic is identical; only the types change (TEXT → String,
+// INTEGER booleans → Boolean, SQLite datetime defaults → @default(now())).
+// ============================================================
+
+model Booking {
+  id              String   @id @default(cuid())
+  guestName       String
+  guestEmail      String
+  guestNotes      String   @default("")
+  startUtc        DateTime
+  endUtc          DateTime
+  durationMinutes Int
+  timezone        String   // IANA tz string, e.g. "America/New_York"
+  status          BookingStatus @default(confirmed)
+  cancelToken     String   @unique
+  rescheduleToken String   @unique
+  cancelTokenUsed     Boolean @default(false)
+  rescheduleTokenUsed Boolean @default(false)
+  reminder24hSent Boolean @default(false)
+  reminder1hSent  Boolean @default(false)
+  /// If this guest was matched to a Contact in the CRM, link here
+  contactId       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contact Contact? @relation(fields: [contactId], references: [id])
+
+  @@index([startUtc])
+  @@index([status])
+  @@index([cancelToken])
+  @@index([rescheduleToken])
+  @@index([status, startUtc, reminder24hSent, reminder1hSent])
+}
+
+enum BookingStatus {
+  confirmed
+  cancelled
+  rescheduled
+}
+
+model AvailabilityConfig {
+  id                  Int      @id @default(1)
+  workingDays         String[] @default(["Mon", "Tue", "Wed", "Thu", "Fri"])
+  startTime           String   @default("09:00") // HH:MM in host's local tz
+  endTime             String   @default("17:00")
+  slotDurationMinutes Int      @default(30)
+  bufferMinutes       Int      @default(15)
+  timezone            String   @default("America/New_York")
+  bookingHorizonDays  Int      @default(60)
+  minNoticeHours      Int      @default(2)
+  updatedAt           DateTime @updatedAt
+}
+
+model BlockedDate {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date
+  reason    String   @default("")
+  createdAt DateTime @default(now())
+
+  @@unique([date])
+}
