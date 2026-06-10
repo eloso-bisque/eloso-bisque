@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import VaultFileTree, { type FileNode } from "@/components/VaultFileTree";
 
@@ -14,17 +14,27 @@ const VaultEditor = dynamic(() => import("@/components/VaultEditor"), {
   ),
 });
 
+interface WsConfig {
+  wsUrl: string;
+  token: string;
+}
+
 export default function DocsPage() {
   const [tree, setTree] = useState<FileNode[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [fileContent, setFileContent] = useState<string>("");
+  const [wsConfig, setWsConfig] = useState<WsConfig | null>(null);
   const [loadingTree, setLoadingTree] = useState(true);
-  const [loadingFile, setLoadingFile] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [treeError, setTreeError] = useState<string | null>(null);
 
-  // Load file tree on mount
+  // Load WS config and file tree on mount
   useEffect(() => {
+    // Fetch WS config (URL + token from server)
+    fetch("/api/vault/ws-url")
+      .then((res) => res.json())
+      .then((data: { wsUrl: string; token: string }) => setWsConfig(data))
+      .catch((err) => console.error("Failed to load WS config:", err));
+
+    // Fetch file tree
     setLoadingTree(true);
     fetch("/api/vault/files")
       .then((res) => {
@@ -42,52 +52,30 @@ export default function DocsPage() {
       .finally(() => setLoadingTree(false));
   }, []);
 
-  // Load file when selected
-  const handleSelectFile = useCallback((path: string) => {
-    if (path === selectedPath) return;
+  const handleSelectFile = (path: string) => {
     setSelectedPath(path);
-    setLoadingFile(true);
-    setSaveStatus("idle");
-
-    fetch(`/api/vault/file?path=${encodeURIComponent(path)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data: { content: string }) => {
-        setFileContent(data.content);
-      })
-      .catch((err) => {
-        console.error("Failed to load file:", err);
-        setFileContent(`# Error loading file\n\n${err.message}`);
-      })
-      .finally(() => setLoadingFile(false));
-  }, [selectedPath]);
-
-  // Save file handler (used by editor's debounced auto-save)
-  const handleSave = useCallback(async (content: string) => {
-    if (!selectedPath) return;
-    setSaveStatus("saving");
-
-    try {
-      const res = await fetch("/api/vault/file", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: selectedPath, content }),
-      });
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 2000);
-    } catch (err) {
-      console.error("Failed to save:", err);
-      setSaveStatus("error");
-    }
-  }, [selectedPath]);
+  };
 
   const fileName = selectedPath
     ? selectedPath.split("/").pop()?.replace(/\.md$/, "") ?? selectedPath
     : null;
+
+  // Derive a stable user identity from localStorage (anonymous until we have proper session user)
+  const [userInfo, setUserInfo] = useState({ name: "Guest", id: "guest-0" });
+  useEffect(() => {
+    // In the future this could come from the session JWT
+    // For now, use a stored anonymous ID
+    const storedId = localStorage.getItem("vault-user-id");
+    const storedName = localStorage.getItem("vault-user-name");
+    if (storedId) {
+      setUserInfo({ name: storedName || "Guest", id: storedId });
+    } else {
+      const newId = `user-${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem("vault-user-id", newId);
+      localStorage.setItem("vault-user-name", "Guest");
+      setUserInfo({ name: "Guest", id: newId });
+    }
+  }, []);
 
   return (
     <div className="flex h-[calc(100vh-120px)] gap-0 -m-4 md:-m-6 mt-0 md:mt-0">
@@ -122,15 +110,6 @@ export default function DocsPage() {
           ) : (
             <span className="text-sm text-bisque-400">No file selected</span>
           )}
-          {saveStatus === "saving" && (
-            <span className="ml-auto text-xs text-bisque-400">Saving...</span>
-          )}
-          {saveStatus === "saved" && (
-            <span className="ml-auto text-xs text-green-500">Saved</span>
-          )}
-          {saveStatus === "error" && (
-            <span className="ml-auto text-xs text-red-500">Save failed</span>
-          )}
           {selectedPath && (
             <span className="ml-auto text-xs text-bisque-300 truncate hidden md:block">
               {selectedPath}
@@ -140,17 +119,18 @@ export default function DocsPage() {
 
         {/* Editor */}
         <div className="flex-1 overflow-hidden relative">
-          {loadingFile ? (
-            <div className="flex items-center justify-center h-full text-bisque-400 text-sm">
-              Loading file...
-            </div>
-          ) : (
+          {wsConfig ? (
             <VaultEditor
-              content={fileContent}
               filePath={selectedPath}
-              readOnly={false}
-              onSave={handleSave}
+              wsUrl={wsConfig.wsUrl}
+              wsToken={wsConfig.token}
+              userName={userInfo.name}
+              userId={userInfo.id}
             />
+          ) : (
+            <div className="flex items-center justify-center h-full text-bisque-400 text-sm">
+              {selectedPath ? "Connecting..." : "Select a file to start editing"}
+            </div>
           )}
         </div>
       </main>

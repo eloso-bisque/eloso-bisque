@@ -1,99 +1,139 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { EditorView, basicSetup } from "codemirror";
 import { EditorState } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
+import * as Y from "yjs";
+import { WebsocketProvider } from "y-websocket";
+import { yCollab } from "y-codemirror.next";
 
-interface VaultEditorProps {
-  content: string;
-  filePath: string | null;
-  readOnly?: boolean;
-  onSave?: (content: string) => void;
+// Deterministic color from user ID (hash-based)
+function hashColor(userId: string): { color: string; colorLight: string } {
+  const palette = [
+    { color: "#30bced", colorLight: "#30bced33" },
+    { color: "#6eeb83", colorLight: "#6eeb8333" },
+    { color: "#ffbc42", colorLight: "#ffbc4233" },
+    { color: "#ecd444", colorLight: "#ecd44433" },
+    { color: "#ee6352", colorLight: "#ee635233" },
+    { color: "#9ac2c9", colorLight: "#9ac2c933" },
+    { color: "#8acb88", colorLight: "#8acb8833" },
+    { color: "#1be7ff", colorLight: "#1be7ff33" },
+  ];
+  let hash = 0;
+  for (let i = 0; i < userId.length; i++) {
+    hash = (hash * 31 + userId.charCodeAt(i)) >>> 0;
+  }
+  return palette[hash % palette.length];
 }
 
-export default function VaultEditor({ content, filePath, readOnly = false, onSave }: VaultEditorProps) {
-  const editorContainerRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+interface VaultEditorProps {
+  filePath: string | null;
+  wsUrl: string;
+  wsToken: string;
+  userName: string;
+  userId: string;
+}
 
-  const handleChange = useCallback(
-    (newContent: string) => {
-      if (!onSave || readOnly) return;
-      // Debounced auto-save: 1.5s after last keystroke
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => {
-        onSave(newContent);
-      }, 1500);
-    },
-    [onSave, readOnly]
-  );
+export default function VaultEditor({
+  filePath,
+  wsUrl,
+  wsToken,
+  userName,
+  userId,
+}: VaultEditorProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const providerRef = useRef<WebsocketProvider | null>(null);
+  const docRef = useRef<Y.Doc | null>(null);
 
   useEffect(() => {
-    if (!editorContainerRef.current) return;
+    if (!containerRef.current || !filePath) return;
 
-    // Destroy old view if exists
+    // Cleanup previous session
     if (viewRef.current) {
       viewRef.current.destroy();
       viewRef.current = null;
     }
-
-    const extensions = [
-      basicSetup,
-      markdown(),
-      oneDark,
-      EditorView.lineWrapping,
-    ];
-
-    if (readOnly) {
-      extensions.push(EditorState.readOnly.of(true));
-    } else {
-      extensions.push(
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            handleChange(update.state.doc.toString());
-          }
-        })
-      );
+    if (providerRef.current) {
+      providerRef.current.destroy();
+      providerRef.current = null;
+    }
+    if (docRef.current) {
+      docRef.current.destroy();
+      docRef.current = null;
     }
 
+    // Create Yjs doc
+    const ydoc = new Y.Doc();
+    docRef.current = ydoc;
+
+    // Encode file path as URL-safe room name
+    // y-websocket appends the roomname to the serverUrl to form the full WS URL
+    const pathSegments = filePath.split("/").map(encodeURIComponent).join("/");
+
+    // Create WebSocket provider
+    // serverUrl = base WS URL (e.g. wss://...vault-ws)
+    // roomname = the file path (used as the room)
+    // params = { token } — passed as query string by y-websocket
+    const provider = new WebsocketProvider(wsUrl, pathSegments, ydoc, {
+      params: { token: wsToken },
+    });
+    providerRef.current = provider;
+
+    // Set awareness (user info for floating cursors)
+    const userColor = hashColor(userId);
+    provider.awareness.setLocalStateField("user", {
+      name: userName,
+      color: userColor.color,
+      colorLight: userColor.colorLight,
+    });
+
+    // Get the shared Y.Text
+    const ytext = ydoc.getText("content");
+
+    // Create undo manager scoped to this text
+    const undoManager = new Y.UndoManager(ytext);
+
+    // Build CodeMirror state with Yjs binding
     const state = EditorState.create({
-      doc: content,
-      extensions,
+      doc: ytext.toString(),
+      extensions: [
+        basicSetup,
+        markdown(),
+        oneDark,
+        EditorView.lineWrapping,
+        yCollab(ytext, provider.awareness, { undoManager }),
+      ],
     });
 
     const view = new EditorView({
       state,
-      parent: editorContainerRef.current,
+      parent: containerRef.current,
     });
-
     viewRef.current = view;
 
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      view.destroy();
-      viewRef.current = null;
-    };
-  // We intentionally only re-create the editor when the file or readOnly mode changes.
-  // Content changes are handled by the updateListener extension.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, readOnly]);
+    // Connection status indicator
+    provider.on("status", (event: { status: string }) => {
+      console.log(`[vault-ws] ${filePath}: ${event.status}`);
+    });
 
-  // When content prop changes (new file loaded), update the document
-  useEffect(() => {
-    if (!viewRef.current) return;
-    const currentContent = viewRef.current.state.doc.toString();
-    if (currentContent !== content) {
-      viewRef.current.dispatch({
-        changes: {
-          from: 0,
-          to: currentContent.length,
-          insert: content,
-        },
-      });
-    }
-  }, [content]);
+    return () => {
+      if (viewRef.current) {
+        viewRef.current.destroy();
+        viewRef.current = null;
+      }
+      if (providerRef.current) {
+        providerRef.current.destroy();
+        providerRef.current = null;
+      }
+      if (docRef.current) {
+        docRef.current.destroy();
+        docRef.current = null;
+      }
+    };
+  }, [filePath, wsUrl, wsToken, userName, userId]);
 
   if (!filePath) {
     return (
@@ -105,7 +145,7 @@ export default function VaultEditor({ content, filePath, readOnly = false, onSav
 
   return (
     <div
-      ref={editorContainerRef}
+      ref={containerRef}
       className="h-full overflow-auto"
       style={{ fontSize: "14px" }}
     />
