@@ -2,11 +2,11 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Strategy Session Confirmed — Eloso',
-  description: 'Your Strategy Session with Eloso is confirmed.',
+  title: 'Discovery Call Confirmed — Eloso',
+  description: 'Your Discovery Call with Eloso is confirmed.',
 };
 
-export default function SigStrategyConfirmedPage() {
+export default function SigDiscoveryConfirmedPage() {
   return (
     <div className="min-h-screen bg-bisque-50 flex flex-col items-center justify-center px-4 py-16">
       <div className="max-w-md w-full text-center">
@@ -25,7 +25,7 @@ export default function SigStrategyConfirmedPage() {
           </div>
 
           <h1 className="text-2xl font-bold text-bisque-950 mb-2">You&apos;re confirmed</h1>
-          <p className="text-bisque-600 text-sm mb-1 font-medium">Strategy Session · 45 minutes</p>
+          <p className="text-bisque-600 text-sm mb-1 font-medium">Discovery Call · 30 minutes</p>
           <p className="text-bisque-500 text-sm mb-6">
             Check your inbox for a calendar invite and the meeting link.
           </p>
@@ -39,7 +39,7 @@ export default function SigStrategyConfirmedPage() {
         </div>
 
         <Link
-          href="/sig"
+          href="/next-steps"
           className="inline-block mt-6 text-bisque-500 text-sm hover:text-bisque-700 transition-colors"
         >
           ← Back to Eloso at SIG

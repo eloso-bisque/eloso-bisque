@@ -12,7 +12,7 @@ export default function SigDiscoveryPage() {
       <div className="max-w-lg w-full">
         {/* Back link */}
         <Link
-          href="/sig"
+          href="/next-steps"
           className="inline-flex items-center text-bisque-500 text-sm hover:text-bisque-700 mb-8 transition-colors"
         >
           ← Back

@@ -27,7 +27,7 @@ export default function SigLandingPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 max-w-xl mx-auto">
           {/* Discovery Call */}
           <Link
-            href="/sig/discovery"
+            href="/next-steps/discovery"
             className="group block bg-white border border-bisque-200 rounded-2xl p-7 text-left hover:border-bisque-400 hover:shadow-md transition-all"
           >
             <div className="text-bisque-500 text-sm font-medium mb-1">30 minutes</div>
@@ -44,7 +44,7 @@ export default function SigLandingPage() {
 
           {/* Strategy Session */}
           <Link
-            href="/sig/strategy"
+            href="/next-steps/strategy"
             className="group block bg-bisque-950 border border-bisque-950 rounded-2xl p-7 text-left hover:bg-bisque-900 hover:shadow-md transition-all"
           >
             <div className="text-bisque-400 text-sm font-medium mb-1">45 minutes</div>
