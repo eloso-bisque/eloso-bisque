@@ -19,6 +19,10 @@ const PUBLIC_PATHS = [
   '/api/booking/cancel',
   '/api/booking/reschedule',
   '/api/cron/reminders',
+  // ELO Forum prospect-facing landing pages
+  '/ELO',
+  // next-steps (SIG) prospect-facing landing pages
+  '/next-steps',
 ];
 
 function isPublicPath(pathname: string): boolean {
