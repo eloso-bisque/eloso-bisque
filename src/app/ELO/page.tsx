@@ -1,12 +1,11 @@
-// TODO: Update this redirect once the correct Paperclip public URL is determined.
-// The previous URL (https://eloso-awp.myownlobster.ai/ELO/) has been removed.
-// Paperclip needs its own dedicated domain/URL — ask Drew for the correct one.
+import { redirect } from 'next/navigation'
+
+// Paperclip AI Company Orchestration Platform
+// Exposed via Cloudflare Quick Tunnel → localhost:3100
+// Tunnel URL is stable for the server lifetime; update PAPERCLIP_TUNNEL_URL env var
+// in Vercel and here if the server is rebooted and a new tunnel URL is assigned.
+const PAPERCLIP_URL = process.env.PAPERCLIP_TUNNEL_URL || 'https://graduation-samples-present-contractors.trycloudflare.com'
 
 export default function EloPage() {
-  return (
-    <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
-      <h1>ELO Forum</h1>
-      <p>This page is temporarily unavailable. The Paperclip URL is being updated.</p>
-    </div>
-  );
+  redirect(PAPERCLIP_URL)
 }
