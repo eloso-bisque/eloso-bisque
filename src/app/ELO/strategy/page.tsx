@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
+import EloBookingWidget from '@/components/EloBookingWidget';
 
 export const metadata: Metadata = {
   title: 'Book a Strategy Session — Eloso',
@@ -29,16 +30,12 @@ export default function EloStrategyPage() {
             </p>
           </div>
 
-          {/* Cal.com embed placeholder */}
-          <div className="border border-bisque-100 rounded-xl bg-bisque-50 p-6 text-center text-bisque-400 text-sm">
-            {/* Replace this div with your cal.com embed snippet */}
-            {/* e.g. <Cal calLink="eloso/strategy" /> */}
-            <p className="font-medium text-bisque-600 mb-1">Calendar booking</p>
-            <p>Embed your cal.com Strategy Session link here.</p>
-            <p className="mt-2 text-xs text-bisque-300">
-              Cal.com link: <code className="bg-bisque-100 px-1 rounded">eloso/strategy</code>
-            </p>
-          </div>
+          {/* Booking widget */}
+          <EloBookingWidget
+            sessionType="strategy"
+            durationLabel="45 min"
+            confirmedHref="/ELO/confirmed/strategy"
+          />
 
           <p className="text-bisque-400 text-xs mt-5 text-center">
             After booking you&apos;ll receive a confirmation email with the meeting link.
