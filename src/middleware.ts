@@ -23,6 +23,8 @@ const PUBLIC_PATHS = [
   '/ELO',
   // next-steps (SIG) prospect-facing landing pages
   '/next-steps',
+  // Temporal Workflow UI (internal tool, public redirect)
+  '/temporal',
 ];
 
 function isPublicPath(pathname: string): boolean {
