@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
+import { randomUUID } from "node:crypto";
 import { parseCsv, type ParsedContact } from "@/lib/csv-parse";
-import { dualWriteCreateEntity } from "@/lib/contacts-dual-write";
+import { dualWriteCreateEntity, withOrganizationNote } from "@/lib/contacts-dual-write";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,71 +22,6 @@ export interface BulkCreateResult {
   skipped: number;
   errors: { name: string; reason: string }[];
   parseErrors: { row: number; raw: string; reason: string }[];
-}
-
-// ---------------------------------------------------------------------------
-// Kissinger GraphQL
-// ---------------------------------------------------------------------------
-
-const KISSINGER_API_URL =
-  process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
-const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
-
-const CREATE_ENTITY_MUTATION = `
-  mutation CreateEntity($input: CreateEntityInput!) {
-    createEntity(input: $input) {
-      id
-      name
-    }
-  }
-`;
-
-async function createEntityInKissinger(
-  kind: "person" | "org",
-  name: string,
-  meta: { key: string; value: string }[]
-): Promise<{ id: string; name: string }> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (KISSINGER_API_TOKEN) {
-    headers["Authorization"] = `Bearer ${KISSINGER_API_TOKEN}`;
-  }
-
-  const res = await fetch(KISSINGER_API_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      query: CREATE_ENTITY_MUTATION,
-      variables: {
-        input: {
-          kind,
-          name,
-          notes: "",
-          meta: meta.length > 0 ? meta : undefined,
-        },
-      },
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText}`);
-  }
-
-  const json = (await res.json()) as {
-    data?: { createEntity: { id: string; name: string } };
-    errors?: { message: string }[];
-  };
-
-  if (json.errors && json.errors.length > 0) {
-    throw new Error(json.errors.map((e) => e.message).join("; "));
-  }
-
-  if (!json.data?.createEntity) {
-    throw new Error("No entity returned from Kissinger");
-  }
-
-  return json.data.createEntity;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,31 +70,27 @@ export async function POST(request: NextRequest) {
   let skipped = 0;
 
   for (const contact of contacts) {
-    // Derive name — required by Kissinger
+    // Derive name — same requirement Kissinger used to enforce
     const name = contact.name || contact.email || contact.organization || "";
     if (!name) {
       skipped++;
       continue;
     }
 
-    // Build meta fields
-    const meta: { key: string; value: string }[] = [];
-    if (contact.email) meta.push({ key: "email", value: contact.email });
-    if (contact.organization)
-      meta.push({ key: "company", value: contact.organization });
-
     try {
-      const entity = await createEntityInKissinger(kind, name, meta);
-      created++;
-      // Dual-write to Postgres (Prisma Phase 3.3, GH #44) — never blocks or
-      // fails the bulk-create loop; Kissinger above remains the operation
-      // of record during the dual-write period.
+      // Postgres is the sole write since the Kissinger dual-write cutover
+      // (Kissinger is no longer in the live bulk-create path; see
+      // src/lib/contacts-dual-write.ts's module doc). Each row self-mints
+      // a stable external id instead of one assigned by Kissinger's
+      // createEntity mutation.
       await dualWriteCreateEntity({
-        kissingerId: entity.id,
+        kissingerId: randomUUID(),
         kind,
-        name: entity.name,
+        name,
         email: contact.email,
+        notes: withOrganizationNote(undefined, contact.organization),
       });
+      created++;
     } catch (err) {
       creationErrors.push({
         name,

@@ -6,8 +6,16 @@ import { useState, useEffect, useCallback } from "react";
  * TrigifySignalsTab — shows Trigify social listening signals for a contact.
  *
  * Signals are stored as Kissinger contact events with createdBy="trigify-sync"
- * and eventType="NOTE". This component fetches all events for the contact and
- * filters to only those created by the sync job.
+ * and eventType="NOTE", written by the external `trigify-daily-sync` cron job
+ * directly into Kissinger — not through this app. This component fetches all
+ * events for the contact from /api/contacts/[id]/trigify-signals (a
+ * dedicated, still-Kissinger-backed route — see that route's doc comment)
+ * and filters to only those created by the sync job.
+ *
+ * This intentionally still reads Kissinger: the sibling
+ * /api/contacts/[id]/events route was cut over to Postgres for the regular
+ * Notes/Meetings/etc events tab, but Trigify's sync job has no Postgres
+ * counterpart to read from yet.
  *
  * TODO: When Kissinger adds server-side filtering for contact events
  * (e.g. contactEventsForEntity(entityId, createdBy: "trigify-sync")),
@@ -90,7 +98,7 @@ export default function TrigifySignalsTab({ contactId }: TrigifySignalsTabProps)
     setError(null);
     try {
       const res = await fetch(
-        `/api/contacts/${encodeURIComponent(contactId)}/events`
+        `/api/contacts/${encodeURIComponent(contactId)}/trigify-signals`
       );
       if (!res.ok) throw new Error(`Request failed: ${res.status}`);
       const json = (await res.json()) as { events: RawEvent[] };
