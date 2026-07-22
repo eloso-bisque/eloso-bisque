@@ -13,6 +13,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { fetchInvestorFirmDetail } from "@/lib/kissinger";
 import type { PersonAtOrg } from "@/lib/kissinger";
+import { fetchInvestorFirmFieldsByKissingerId, overrideFirmMetaWithPostgres } from "@/lib/investors-read";
 import EnrichButton from "@/components/EnrichButton";
 import { scoreInvestor } from "@/lib/score-contact";
 
@@ -66,16 +67,23 @@ export default async function FirmDetailPage({ params }: FirmDetailPageProps) {
 
   const { contact: firm, edges, peopleAtOrg } = result;
 
+  // Investor-specific fields are Postgres-sourced (Prisma Phase 3.5, GH #45)
+  // — relationship-graph data above (edges, peopleAtOrg) stays on Kissinger,
+  // owned by GH #46. Falls back to the Kissinger meta unchanged if the org
+  // hasn't been backfilled into Postgres yet or the lookup fails.
+  const pgFirmFields = await fetchInvestorFirmFieldsByKissingerId(firm.id);
+  const meta = overrideFirmMetaWithPostgres(firm.meta, pgFirmFields);
+
   // Meta extraction
-  const stage = metaVal(firm.meta, "stage");
-  const checkSize = metaVal(firm.meta, "check_size");
-  const location = metaVal(firm.meta, "location");
-  const thesis = metaVal(firm.meta, "thesis");
-  const priority = metaVal(firm.meta, "priority");
-  const pipelineStage = metaVal(firm.meta, "pipeline_stage") || "Research";
-  const website = metaVal(firm.meta, "website");
-  const sectorFit = metaVal(firm.meta, "sector_fit");
-  const source = metaVal(firm.meta, "source");
+  const stage = metaVal(meta, "stage");
+  const checkSize = metaVal(meta, "check_size");
+  const location = metaVal(meta, "location");
+  const thesis = metaVal(meta, "thesis");
+  const priority = metaVal(meta, "priority");
+  const pipelineStage = metaVal(meta, "pipeline_stage") || "Research";
+  const website = metaVal(meta, "website");
+  const sectorFit = metaVal(meta, "sector_fit");
+  const source = metaVal(meta, "source");
 
   // Compute investor fit score
   const scoreResult = scoreInvestor({
@@ -84,7 +92,7 @@ export default async function FirmDetailPage({ params }: FirmDetailPageProps) {
     kind: firm.kind,
     tags: firm.tags,
     notes: firm.notes,
-    meta: firm.meta,
+    meta,
     updatedAt: firm.updatedAt,
     edges: [],
     isInvestor: true,

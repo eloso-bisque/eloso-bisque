@@ -9,10 +9,14 @@
  */
 
 import Link from "next/link";
-import { fetchInvestorData } from "@/lib/kissinger";
 import type { InvestorFirm, InvestorPerson } from "@/lib/kissinger";
 import { scoreInvestor } from "@/lib/score-contact";
 import type { ScoreResult } from "@/lib/score-contact";
+import {
+  fetchInvestorFirmsFromPostgres,
+  fetchInvestorPeopleFromPostgres,
+  buildFirmScoringInput,
+} from "@/lib/investors-read";
 
 // ---------------------------------------------------------------------------
 // Sub-tab type
@@ -172,7 +176,7 @@ function PipelineView({ firms }: { firms: InvestorFirm[] }) {
   return (
     <div className="space-y-6">
       <p className="text-sm text-bisque-500">
-        Stages are stored as <code className="font-mono text-xs bg-bisque-100 px-1 rounded">pipeline_stage</code> meta on each firm.
+        Stages are stored on each firm&apos;s <code className="font-mono text-xs bg-bisque-100 px-1 rounded">investorPipeline</code> field.
         Click a firm to view details and update stage.
       </p>
       {PIPELINE_STAGES.map((stage) => {
@@ -225,30 +229,28 @@ export default async function InvestorsPage({ searchParams }: InvestorsPageProps
   const params = await searchParams;
   const tab: InvestorTab = isValidTab(params.tab) ? params.tab : "firms";
 
-  const data = await fetchInvestorData();
-  const offline = !data;
+  // Postgres-backed read path (Prisma Phase 3.5, GH #45) — replaces
+  // fetchInvestorData()'s Kissinger full-corpus scan + INVESTOR_FIRM_TAGS/
+  // INVESTOR_PERSON_TAGS client-side tag matching. Firms come with their
+  // `notes` field alongside so scoring doesn't need a second per-entity
+  // fetch the way the old fetchEntityDetails() N+1 did. See
+  // src/lib/investors-read.ts for the parity evidence backing this cutover.
+  const [firmRows, peopleRows] = await Promise.all([
+    fetchInvestorFirmsFromPostgres(),
+    fetchInvestorPeopleFromPostgres(),
+  ]);
+  const offline = firmRows === null || peopleRows === null;
 
-  const firms: InvestorFirm[] = data?.firms ?? [];
-  const people: InvestorPerson[] = data?.people ?? [];
-  const firmDetails = data?.firmDetails ?? new Map();
+  const firms: InvestorFirm[] = (firmRows ?? []).map((r) => r.firm);
+  const firmNotesById = new Map((firmRows ?? []).map((r) => [r.firm.id, r.notes]));
+  const people: InvestorPerson[] = peopleRows ?? [];
 
   // Compute investor fit scores
   const firmScores = new Map<string, ScoreResult>();
   for (const firm of firms) {
-    const detail = firmDetails.get(firm.id);
     firmScores.set(
       firm.id,
-      scoreInvestor({
-        id: firm.id,
-        name: firm.name,
-        kind: firm.kind,
-        tags: firm.tags,
-        notes: detail?.notes ?? "",
-        meta: detail?.meta ?? [],
-        updatedAt: firm.updatedAt,
-        edges: [],
-        isInvestor: true,
-      })
+      scoreInvestor(buildFirmScoringInput(firm, firmNotesById.get(firm.id) ?? ""))
     );
   }
 
@@ -280,7 +282,7 @@ export default async function InvestorsPage({ searchParams }: InvestorsPageProps
       {/* Offline banner */}
       {offline && (
         <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-          Kissinger is offline — showing cached data.
+          Investor data is temporarily unavailable — please try again shortly.
         </div>
       )}
 

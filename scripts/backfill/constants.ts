@@ -122,13 +122,21 @@ export const ORG_PROSPECT_TAG = "prospect";
 export const ORG_VC_TAGS = ["vc", "investor"];
 export const PERSON_PROSPECT_CONTACT_TAG = "prospect-contact";
 /**
- * Judgment call: the design doc's tag table has no explicit source tag for
- * Contact.isInvestorContact. "investor" is the literal analogue of the org
- * mapping (`vc`,`investor` -> isVcFirm) and is used the same way here.
- * Broader/ambiguous tags ("vc", "angel", "vc-prospect", "partner") are left
- * as plain ContactTag rows rather than guessed into this boolean.
+ * GH #45 correction: a prior pass here used only "investor" (not "vc"),
+ * reasoning that "vc" was too broad/ambiguous a signal for a person. Real
+ * prod data contradicts that: Kissinger's own live classification —
+ * `INVESTOR_PERSON_TAGS = new Set(["vc", "investor"])` in src/lib/
+ * kissinger.ts, used by `isInvestorPerson()` and the Contacts-page investor
+ * exclusion filter everywhere the app has run in production — already
+ * treats "vc" as sufficient on its own. Auditing the live Kissinger graph
+ * during the #45 parity check found 65 person entities tagged "vc" without
+ * "investor" (Hunter Walk, Mark Mullen, Jonathan Lehr, etc. — all
+ * unambiguous VC partners/founders), 32 of which never set
+ * isInvestorContact=true under the old single-tag check: a 32/65 (49%)
+ * false-negative rate. This mirrors the org-side mapping (`vc`,`investor`
+ * -> isVcFirm, ORG_VC_TAGS above) instead of diverging from it.
  */
-export const PERSON_INVESTOR_TAG = "investor";
+export const PERSON_INVESTOR_TAGS = ["vc", "investor"];
 export const OUTREACH_SENT_TAG = "outreach-sent";
 export const FIT_TAG_PREFIX = "fit-";
 export const VERTICAL_TAG_PREFIX = "vertical:";

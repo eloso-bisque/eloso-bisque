@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { updatePipelineStage } from "@/lib/kissinger";
+import { dualWriteInvestorPipelineStage } from "@/lib/investors-dual-write";
 
 const VALID_STAGES = new Set([
   "Research",
@@ -44,6 +45,10 @@ export async function POST(request: NextRequest) {
   if (!ok) {
     return NextResponse.json({ error: "Failed to update stage" }, { status: 500 });
   }
+
+  // Dual-write to Postgres (Prisma Phase 3.5, GH #45) — never blocks or
+  // fails this request; Kissinger above is the operation of record.
+  await dualWriteInvestorPipelineStage({ kissingerFirmId: firmId, stageLabel: stage });
 
   return NextResponse.json({ ok: true, firmId, stage });
 }
