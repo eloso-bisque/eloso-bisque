@@ -21,7 +21,7 @@ import {
   ORG_PROSPECT_TAG,
   ORG_VC_TAGS,
   PERSON_PROSPECT_CONTACT_TAG,
-  PERSON_INVESTOR_TAG,
+  PERSON_INVESTOR_TAGS,
   OUTREACH_SENT_TAG,
   FIT_TAG_PREFIX,
   VERTICAL_TAG_PREFIX,
@@ -210,7 +210,11 @@ export function classifyPersonTags(tags: string[]): PersonTagClassification {
   let warning: string | undefined;
 
   for (const tag of tags) {
-    if (tag === PERSON_PROSPECT_CONTACT_TAG || tag === PERSON_INVESTOR_TAG || tag === OUTREACH_SENT_TAG) {
+    if (
+      tag === PERSON_PROSPECT_CONTACT_TAG ||
+      PERSON_INVESTOR_TAGS.includes(tag) ||
+      tag === OUTREACH_SENT_TAG
+    ) {
       continue;
     }
     if (tag.startsWith(QUEUE_TAG_PREFIX)) {
@@ -236,7 +240,7 @@ export function classifyPersonTags(tags: string[]): PersonTagClassification {
 
   return {
     isProspectContact: tags.includes(PERSON_PROSPECT_CONTACT_TAG),
-    isInvestorContact: tags.includes(PERSON_INVESTOR_TAG),
+    isInvestorContact: PERSON_INVESTOR_TAGS.some((t) => tags.includes(t)),
     fitTier,
     queueUserId,
     outreachSent: tags.includes(OUTREACH_SENT_TAG),

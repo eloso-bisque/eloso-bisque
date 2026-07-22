@@ -161,6 +161,23 @@ describe("classifyPersonTags", () => {
     expect(result.isProspectContact).toBe(true);
     expect(result.isInvestorContact).toBe(true);
   });
+
+  // Regression test for GH #45: a person tagged only "vc" (no "investor"
+  // tag) must still classify as an investor contact. Real prod data has 65
+  // live Kissinger person entities tagged "vc" this way (e.g. VC partners/
+  // founders) — before this fix, all 65 fell through to isInvestorContact
+  // =false, a 49% false-negative rate against Kissinger's own
+  // INVESTOR_PERSON_TAGS = new Set(["vc", "investor"]) definition of an
+  // investor person (src/lib/kissinger.ts).
+  it("classifies a person tagged only 'vc' (no 'investor' tag) as an investor contact", () => {
+    const result = classifyPersonTags(["vc", "partner", "seed"]);
+    expect(result.isInvestorContact).toBe(true);
+  });
+
+  it("strips the 'vc' tag out of plainTags the same way 'investor' is stripped", () => {
+    const result = classifyPersonTags(["vc", "partner"]);
+    expect(result.plainTags).toEqual(["partner"]);
+  });
 });
 
 describe("resolveHq", () => {

@@ -87,8 +87,9 @@ describe("/investors page", () => {
     expect(src).toContain("/investors/people/");
   });
 
-  it("uses fetchInvestorData", () => {
-    expect(src).toContain("fetchInvestorData");
+  it("uses the Postgres-backed investors-read fetch functions (Prisma Phase 3.5, GH #45)", () => {
+    expect(src).toContain("fetchInvestorFirmsFromPostgres");
+    expect(src).toContain("fetchInvestorPeopleFromPostgres");
   });
 
   it("uses scoreInvestor", () => {

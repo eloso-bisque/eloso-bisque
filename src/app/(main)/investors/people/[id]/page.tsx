@@ -11,6 +11,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { fetchInvestorPersonDetail } from "@/lib/kissinger";
+import { fetchInvestorPersonFieldsByKissingerId, overridePersonMetaWithPostgres } from "@/lib/investors-read";
 import EnrichButton from "@/components/EnrichButton";
 import { scoreInvestor } from "@/lib/score-contact";
 
@@ -115,14 +116,21 @@ export default async function PersonDetailPage({ params }: PersonDetailPageProps
 
   const { contact: person, edges } = result;
 
+  // Investor-specific fields are Postgres-sourced (Prisma Phase 3.5, GH #45)
+  // — relationship-graph data above (edges/works_at) stays on Kissinger,
+  // owned by GH #46. Falls back to the Kissinger meta unchanged if the
+  // contact hasn't been backfilled into Postgres yet or the lookup fails.
+  const pgPersonFields = await fetchInvestorPersonFieldsByKissingerId(person.id);
+  const meta = overridePersonMetaWithPostgres(person.meta, pgPersonFields);
+
   // Meta extraction
-  const title = metaVal(person.meta, "title");
-  const orgName = metaVal(person.meta, "org") || metaVal(person.meta, "company");
-  const existingIncentive = metaVal(person.meta, "incentive");
-  const warmIntroPath = metaVal(person.meta, "warm_intro_path");
-  const linkedinUrl = metaVal(person.meta, "linkedin_url") || metaVal(person.meta, "linkedin");
-  const priority = metaVal(person.meta, "priority");
-  const source = metaVal(person.meta, "source");
+  const title = metaVal(meta, "title");
+  const orgName = metaVal(meta, "org") || metaVal(meta, "company");
+  const existingIncentive = metaVal(meta, "incentive");
+  const warmIntroPath = metaVal(meta, "warm_intro_path");
+  const linkedinUrl = metaVal(meta, "linkedin_url") || metaVal(meta, "linkedin");
+  const priority = metaVal(meta, "priority");
+  const source = metaVal(meta, "source");
 
   // Infer incentive
   const incentive = inferIncentive(title, existingIncentive);
@@ -139,7 +147,7 @@ export default async function PersonDetailPage({ params }: PersonDetailPageProps
     kind: person.kind,
     tags: person.tags,
     notes: person.notes,
-    meta: person.meta,
+    meta,
     updatedAt: person.updatedAt,
     edges: [],
     isInvestor: true,
