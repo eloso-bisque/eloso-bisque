@@ -1,129 +1,23 @@
 import Link from "next/link";
+import {
+  fetchOrgsForSectorFromPostgres,
+  fetchSectorDisplayName,
+  type SectorOrgListItem,
+} from "@/lib/sectors-read";
 
 export const metadata = {
   title: "Sector — Eloso Bisque",
 };
 
-// ---------------------------------------------------------------------------
-// Data fetching
-// ---------------------------------------------------------------------------
-
-interface OrgRow {
-  id: string;
-  name: string;
-  tags: string[];
-  meta: { key: string; value: string }[];
-  archived: boolean;
-}
-
-/**
- * Fetch all non-archived org entities whose sector_primary meta matches the sector.
- * This uses the entities(kind=org) paginated query, then fetches entity details
- * for each to get meta, filtering by sector_primary.
- */
-async function fetchOrgsForSector(sector: string): Promise<OrgRow[]> {
-  const KISSINGER_API_URL =
-    process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
-  const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
-
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (KISSINGER_API_TOKEN) headers["Authorization"] = `Bearer ${KISSINGER_API_TOKEN}`;
-
-  async function runGql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
-    const res = await fetch(KISSINGER_API_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ query, variables }),
-      next: { revalidate: 120 },
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!res.ok) throw new Error(`Kissinger: ${res.status}`);
-    const json = (await res.json()) as { data?: T; errors?: unknown[] };
-    if (json.errors?.length) throw new Error(`GraphQL errors: ${JSON.stringify(json.errors)}`);
-    return json.data as T;
-  }
-
-  // Step 1: get all org IDs (lightweight — no meta)
-  const PAGE = 500;
-  const orgIds: string[] = [];
-  let cursor: string | undefined;
-  let safety = 0;
-
-  while (safety < 10) {
-    safety++;
-    try {
-      const data = await runGql<{
-        entities: {
-          pageInfo: { hasNextPage: boolean; endCursor: string | null };
-          edges: { node: { id: string; archived: boolean } }[];
-        };
-      }>(
-        `query OrgIds($first: Int, $after: String) {
-          entities(kind: "org", first: $first, after: $after) {
-            pageInfo { hasNextPage endCursor }
-            edges { node { id archived } }
-          }
-        }`,
-        { first: PAGE, after: cursor }
-      );
-
-      const raw = data.entities;
-      raw.edges
-        .filter((e) => !e.node.archived)
-        .forEach((e) => orgIds.push(e.node.id));
-
-      if (!raw.pageInfo.hasNextPage || !raw.pageInfo.endCursor) break;
-      cursor = raw.pageInfo.endCursor;
-    } catch {
-      break;
-    }
-  }
-
-  if (orgIds.length === 0) return [];
-
-  // Step 2: fetch entity details in parallel batches of 20
-  const BATCH = 20;
-  const results: OrgRow[] = [];
-
-  for (let i = 0; i < orgIds.length; i += BATCH) {
-    const batch = orgIds.slice(i, i + BATCH);
-    const settled = await Promise.allSettled(
-      batch.map((id) =>
-        runGql<{ entity: OrgRow }>(
-          `query OrgDetail($id: String!) {
-            entity(id: $id) {
-              id name tags archived
-              meta { key value }
-            }
-          }`,
-          { id }
-        ).then((d) => d.entity)
-      )
-    );
-
-    for (const r of settled) {
-      if (r.status === "fulfilled") {
-        const org = r.value;
-        const sectorMeta = org.meta.find((m) => m.key === "sector_primary")?.value ?? "";
-        if (sectorMeta.toLowerCase() === sector.toLowerCase()) {
-          results.push(org);
-        }
-      }
-    }
-  }
-
-  return results.sort((a, b) => a.name.localeCompare(b.name));
-}
+// See src/app/(main)/sectors/page.tsx for why this is required for a
+// Prisma-backed page with no other dynamic signal.
+export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
 // Components
 // ---------------------------------------------------------------------------
 
-function OrgCard({ org }: { org: OrgRow }) {
-  const metaMap = Object.fromEntries(org.meta.map((m) => [m.key, m.value]));
-  const hq = metaMap["hq"] ?? metaMap["location"] ?? "";
-  const website = metaMap["website"] ?? metaMap["url"] ?? "";
-
+function OrgCard({ org }: { org: SectorOrgListItem }) {
   return (
     <Link
       href={`/contacts/${org.id}`}
@@ -144,9 +38,9 @@ function OrgCard({ org }: { org: OrgRow }) {
           </div>
         )}
       </div>
-      {(hq || website) && (
+      {(org.hq || org.website) && (
         <p className="text-xs text-bisque-400 mt-1">
-          {[hq, website].filter(Boolean).join(" · ")}
+          {[org.hq, org.website].filter(Boolean).join(" · ")}
         </p>
       )}
     </Link>
@@ -163,14 +57,16 @@ interface PageProps {
 
 export default async function SectorDetailPage({ params }: PageProps) {
   const { sector: sectorEncoded } = await params;
-  const sector = decodeURIComponent(sectorEncoded);
+  // The slug here is Sector.slug (hyphenated, e.g. "defense-aerospace") —
+  // the same identifier the heatmap tile links with, per src/lib/sectors-read.ts.
+  const slug = decodeURIComponent(sectorEncoded);
 
-  let orgs: OrgRow[] = [];
-  try {
-    orgs = await fetchOrgsForSector(sector);
-  } catch {
-    // Kissinger offline — show empty state
-  }
+  const [orgsResult, displayName] = await Promise.all([
+    fetchOrgsForSectorFromPostgres(slug),
+    fetchSectorDisplayName(slug),
+  ]);
+  const orgs = orgsResult ?? [];
+  const heading = displayName ?? slug;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -180,12 +76,12 @@ export default async function SectorDetailPage({ params }: PageProps) {
           Sectors
         </Link>
         <span className="mx-2">/</span>
-        <span className="text-bisque-700 font-medium">{sector}</span>
+        <span className="text-bisque-700 font-medium">{heading}</span>
       </nav>
 
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-bisque-900">{sector}</h1>
+        <h1 className="text-3xl font-bold text-bisque-900">{heading}</h1>
         <p className="text-sm text-bisque-500 mt-1">
           {orgs.length} org{orgs.length !== 1 ? "s" : ""} in this sector
         </p>
@@ -196,11 +92,7 @@ export default async function SectorDetailPage({ params }: PageProps) {
         <div className="text-center py-12 text-bisque-400">
           <p className="text-lg font-medium text-bisque-600">No orgs found</p>
           <p className="text-sm mt-1">
-            Tag org entities with{" "}
-            <code className="bg-bisque-100 px-1 rounded text-bisque-700">
-              sector_primary
-            </code>{" "}
-            = <em>{sector}</em> to populate this list.
+            Assign orgs to this sector to populate this list.
           </p>
         </div>
       ) : (

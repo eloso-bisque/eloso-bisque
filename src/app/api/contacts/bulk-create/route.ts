@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { parseCsv, type ParsedContact } from "@/lib/csv-parse";
+import { dualWriteCreateEntity } from "@/lib/contacts-dual-write";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -147,8 +148,17 @@ export async function POST(request: NextRequest) {
       meta.push({ key: "company", value: contact.organization });
 
     try {
-      await createEntityInKissinger(kind, name, meta);
+      const entity = await createEntityInKissinger(kind, name, meta);
       created++;
+      // Dual-write to Postgres (Prisma Phase 3.3, GH #44) — never blocks or
+      // fails the bulk-create loop; Kissinger above remains the operation
+      // of record during the dual-write period.
+      await dualWriteCreateEntity({
+        kissingerId: entity.id,
+        kind,
+        name: entity.name,
+        email: contact.email,
+      });
     } catch (err) {
       creationErrors.push({
         name,

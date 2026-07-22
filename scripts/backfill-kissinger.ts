@@ -457,28 +457,48 @@ async function upsertQueueEntries(
       ? orgIdByKissingerId.get(resolution.organizationKissingerId) ?? null
       : null;
 
-    await prisma.outreachQueueEntry.upsert({
-      where: { unique_active_assignment: { contactId, isActive: queuePlan.isActive } },
-      update: {
-        userId: queuePlan.userId,
-        organizationId,
-        deactivatedReason: queuePlan.deactivatedReason,
-        currentStage: p.outreachStage as OutreachStage,
-      },
-      create: {
-        contactId,
-        userId: queuePlan.userId,
-        organizationId,
-        isActive: queuePlan.isActive,
-        deactivatedReason: queuePlan.deactivatedReason,
-        // Judgment call: Kissinger has no historical record of the contact's
-        // stage at the moment they were queued — the current outreachStage
-        // is the best available proxy for both fields on initial backfill.
-        stageAtAssignment: p.outreachStage as OutreachStage,
-        currentStage: p.outreachStage as OutreachStage,
-        deactivatedAt: queuePlan.isActive ? null : new Date(),
-      },
+    // NOTE (fixed as part of GH #44, pre-existing build break): this used to be
+    // a single `prisma.outreachQueueEntry.upsert({ where: { unique_active_assignment: ... } })`.
+    // PR #48 (bd6ad5b) replaced the full `@@unique([contactId, isActive])` with
+    // a hand-authored partial index (`WHERE "isActive" = true`) to fix an
+    // invariant bug — see docs/prisma-schema-design.md / prisma/schema.prisma
+    // comment on OutreachQueueEntry. Prisma's schema DSL can't express a
+    // partial index, so it no longer generates a `unique_active_assignment`
+    // compound-unique input type, which made this script fail `next build`'s
+    // typecheck (and therefore `vercel --prod`) ever since. find-then-write
+    // reproduces the same idempotent upsert-on-(contactId, isActive) semantics
+    // without depending on a named unique index Prisma doesn't know about.
+    const existing = await prisma.outreachQueueEntry.findFirst({
+      where: { contactId, isActive: queuePlan.isActive },
+      select: { id: true },
     });
+    if (existing) {
+      await prisma.outreachQueueEntry.update({
+        where: { id: existing.id },
+        data: {
+          userId: queuePlan.userId,
+          organizationId,
+          deactivatedReason: queuePlan.deactivatedReason,
+          currentStage: p.outreachStage as OutreachStage,
+        },
+      });
+    } else {
+      await prisma.outreachQueueEntry.create({
+        data: {
+          contactId,
+          userId: queuePlan.userId,
+          organizationId,
+          isActive: queuePlan.isActive,
+          deactivatedReason: queuePlan.deactivatedReason,
+          // Judgment call: Kissinger has no historical record of the contact's
+          // stage at the moment they were queued — the current outreachStage
+          // is the best available proxy for both fields on initial backfill.
+          stageAtAssignment: p.outreachStage as OutreachStage,
+          currentStage: p.outreachStage as OutreachStage,
+          deactivatedAt: queuePlan.isActive ? null : new Date(),
+        },
+      });
+    }
   });
 
   return count;

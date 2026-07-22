@@ -1,27 +1,46 @@
 import Link from "next/link";
-import { fetchSectorAggregates, type SectorAggregate } from "@/lib/kissinger";
+import { fetchSectorHeatmapFromPostgres, type SectorHeatmapTile } from "@/lib/sectors-read";
 
 export const metadata = {
   title: "Sectors — Eloso Bisque",
 };
 
+// This page has no dynamic params/searchParams, so without this Next.js
+// would treat the Prisma read as statically analyzable and prerender it
+// once at build time (unlike a Kissinger fetch(), a Prisma query gives Next
+// no signal that the data is request-time-variable). Matches the same fix
+// already applied to src/app/(main)/admin/activity/page.tsx (Phase 3.1) for
+// the same reason — without this, the heatmap would silently freeze at
+// whatever data existed at the last deploy.
+export const dynamic = "force-dynamic";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Postgres Organization.icpScore is stored 0-100 (see prisma/schema.prisma
+// comment on Organization.icpScore), matching the convention used
+// everywhere else icp_score is displayed in this app (e.g.
+// src/app/(main)/contacts/[id]/page.tsx ICPScoreSection: >=70 green, >=40
+// yellow). The Kissinger-backed version of this page assumed a 0-1
+// fraction (score > 0.7 / >= 0.4, times-100 for the label) — but Kissinger's
+// own sectorAggregates.avgIcpScore was always null in production (confirmed
+// via scripts/_probe3.ts), so that 0-1 assumption was never actually
+// exercised against real data. Fixed here to the 0-100 convention the rest
+// of the app uses, now that avgIcpScore is a real, populated value.
 function icpColor(score: number | null): string {
   if (score === null) return "bg-gray-100 text-gray-500";
-  if (score > 0.7) return "bg-green-100 text-green-800";
-  if (score >= 0.4) return "bg-yellow-100 text-yellow-800";
+  if (score >= 70) return "bg-green-100 text-green-800";
+  if (score >= 40) return "bg-yellow-100 text-yellow-800";
   return "bg-red-100 text-red-800";
 }
 
 function icpLabel(score: number | null): string {
   if (score === null) return "—";
-  return (score * 100).toFixed(0) + "%";
+  return Math.round(score) + "";
 }
 
-function coveragePercent(sector: SectorAggregate): number {
+function coveragePercent(sector: SectorHeatmapTile): number {
   if (sector.orgCount === 0) return 0;
   return sector.prospectsWithContacts / sector.orgCount;
 }
@@ -75,9 +94,9 @@ function EmptyState() {
       </svg>
       <p className="text-lg font-medium text-bisque-600">No sector data yet</p>
       <p className="text-sm mt-1">
-        Tag org entities with{" "}
-        <code className="bg-bisque-100 px-1 rounded text-bisque-700">sector_primary</code>{" "}
-        meta to populate this view.
+        Assign orgs to a{" "}
+        <code className="bg-bisque-100 px-1 rounded text-bisque-700">Sector</code>{" "}
+        to populate this view.
       </p>
     </div>
   );
@@ -87,21 +106,20 @@ function EmptyState() {
 // Sector tile
 // ---------------------------------------------------------------------------
 
-function SectorTile({ sector }: { sector: SectorAggregate }) {
+function SectorTile({ sector }: { sector: SectorHeatmapTile }) {
   const pct = coveragePercent(sector);
   const hasGap = pct < 0.5;
   const colorClass = icpColor(sector.avgIcpScore);
-  const slug = encodeURIComponent(sector.sector);
 
   return (
     <Link
-      href={`/sectors/${slug}`}
+      href={`/sectors/${encodeURIComponent(sector.slug)}`}
       className="block bg-white rounded-xl border border-bisque-200 p-5 hover:border-bisque-400 hover:shadow-md transition-all group"
     >
       {/* Header row */}
       <div className="flex items-start justify-between gap-2">
         <h2 className="text-sm font-bold text-bisque-900 group-hover:text-bisque-700 leading-snug">
-          {sector.sector}
+          {sector.displayName}
         </h2>
         <div className="flex gap-1.5 flex-shrink-0">
           {/* ICP fit badge */}
@@ -133,6 +151,13 @@ function SectorTile({ sector }: { sector: SectorAggregate }) {
       {/* Coverage bar */}
       <CoverageBar pct={pct} />
 
+      {/* Default assignee, if seeded (Sector.defaultAssignee) */}
+      {sector.defaultAssignee !== null && (
+        <p className="text-xs text-bisque-400 mt-2">
+          Default assignee: <span className="font-medium text-bisque-600">{sector.defaultAssignee}</span>
+        </p>
+      )}
+
       {/* Apollo market size (if set) */}
       {sector.apolloMarketSize !== null && (
         <p className="text-xs text-bisque-400 mt-2">
@@ -151,7 +176,7 @@ function SectorTile({ sector }: { sector: SectorAggregate }) {
 // ---------------------------------------------------------------------------
 
 export default async function SectorsPage() {
-  const sectors = await fetchSectorAggregates();
+  const sectors = await fetchSectorHeatmapFromPostgres();
   const totalOrgs = sectors.reduce((sum, s) => sum + s.orgCount, 0);
   const gapCount = sectors.filter((s) => coveragePercent(s) < 0.5).length;
 
@@ -178,7 +203,7 @@ export default async function SectorsPage() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {sectors.map((sector) => (
-            <SectorTile key={sector.sector} sector={sector} />
+            <SectorTile key={sector.slug} sector={sector} />
           ))}
         </div>
       )}

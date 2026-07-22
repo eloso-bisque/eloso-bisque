@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
+import { dualWriteUpdateNotes } from "@/lib/contacts-dual-write";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -62,10 +63,14 @@ export async function PATCH(
   }
 
   try {
+    const decodedId = decodeURIComponent(id);
     await gqlMutate(UPDATE_ENTITY_NOTES_MUTATION, {
-      id: decodeURIComponent(id),
+      id: decodedId,
       input: { notes: body.notes },
     });
+    // Dual-write to Postgres (Prisma Phase 3.3, GH #44) — never blocks or
+    // fails this request; Kissinger above is the operation of record.
+    await dualWriteUpdateNotes({ kissingerId: decodedId, notes: body.notes });
     revalidateTag("contacts");
     return NextResponse.json({ ok: true });
   } catch (err) {

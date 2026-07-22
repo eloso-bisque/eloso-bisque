@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import Anthropic from "@anthropic-ai/sdk";
+import { dualWriteCreateEntity } from "@/lib/contacts-dual-write";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -199,6 +200,19 @@ export async function POST(request: NextRequest) {
 
     // Step 4: Save to Kissinger
     const created = await createEntityInKissinger(kind, name, meta, enriched.notes);
+
+    // Step 5: Dual-write to Postgres (Prisma Phase 3.3, GH #44) — never
+    // blocks or fails this request; Kissinger above is the operation of
+    // record during the dual-write period.
+    if (created) {
+      await dualWriteCreateEntity({
+        kissingerId: created.id,
+        kind,
+        name: created.name,
+        email: enriched.email,
+        notes: enriched.notes,
+      });
+    }
 
     // Invalidate contacts and funnel caches so the new contact appears immediately
     revalidateTag("contacts");
