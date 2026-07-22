@@ -17,7 +17,6 @@ import {
   listUpcomingBookings,
   createBooking,
   getConflictingBookings,
-  setKissingerContactId,
 } from '@/lib/booking/db';
 import { validateSlot } from '@/lib/booking/slots';
 import {
@@ -26,7 +25,12 @@ import {
   buildHostConfirmationEmail,
   generateICS,
 } from '@/lib/booking/email';
-import { syncBookingToKissinger } from '@/lib/booking/kissinger-adapter';
+// Kissinger sync (src/lib/booking/kissinger-adapter.ts) intentionally not
+// imported here anymore — disconnected from the live booking path. Booking
+// is fully self-contained in Postgres (src/lib/booking/db.ts); the Kissinger
+// sync was pure best-effort mirroring into the CRM, not booking's source of
+// truth. The adapter itself is untouched and still usable if Kissinger sync
+// is wanted again later.
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -141,21 +145,6 @@ export async function POST(request: NextRequest) {
         buildHostConfirmationEmail(booking, cancelUrl, rescheduleUrl, hostEmail, hostName, icsContent)
       )
     : Promise.resolve({ ok: true });
-
-  // Fire-and-forget Kissinger sync
-  syncBookingToKissinger({
-    booking_id: booking.id,
-    guest_name: booking.guest_name,
-    guest_email: booking.guest_email,
-    start_utc: booking.start_utc,
-    end_utc: booking.end_utc,
-    duration_minutes: booking.duration_minutes,
-    timezone: booking.timezone,
-  }).then(contactId => {
-    if (contactId) {
-      setKissingerContactId(booking.id, contactId);
-    }
-  });
 
   // Wait for emails (but don't fail booking if they fail)
   await Promise.allSettled([guestEmailPromise, hostEmailPromise]);

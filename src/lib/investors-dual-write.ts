@@ -1,16 +1,14 @@
 /**
- * Investors pipeline-stage dual-write (Prisma Phase 3.5, GH #45).
+ * Investors pipeline-stage write path (Prisma Phase 3.5, GH #45; cut over to
+ * Postgres-only in the Kissinger live-path disconnect).
  *
- * POST /api/investors/pipeline-stage (src/app/api/investors/pipeline-stage/
- * route.ts) currently only calls Kissinger's `updatePipelineStage(firmId,
- * stage)`, which writes `meta.pipeline_stage` on the Kissinger entity.
- * Kissinger remains the write of record during this phase — this helper
- * runs *alongside* that write (never replacing it) and mirrors the same
- * state change into `Organization.investorPipeline` +
- * `investorPipelineUpdatedAt`, resolved via `kissingerId`, following the
- * exact dual-write contract established in outreach-dual-write.ts (GH #43):
- * never throw, resolve by kissingerId, log + skip on any missing row or
- * Postgres error.
+ * POST /api/investors/pipeline-stage used to call Kissinger's
+ * `updatePipelineStage(firmId, stage)` (writing `meta.pipeline_stage` on the
+ * Kissinger entity) alongside this helper. That Kissinger call has been
+ * removed from the route — Postgres (`Organization.investorPipeline` +
+ * `investorPipelineUpdatedAt`, resolved via `kissingerId`) is now the sole
+ * write, so this throws on any missing row or Postgres error instead of
+ * swallowing it.
  */
 
 import { prisma } from "@/lib/prisma";
@@ -23,7 +21,11 @@ export interface DualWriteInvestorPipelineStageParams {
   stageLabel: string;
 }
 
-/** Dual-write for POST /api/investors/pipeline-stage. Never throws. */
+/**
+ * Writes the investor pipeline stage. Throws for an unrecognized stage
+ * label, a missing Organization row, or any Postgres error — this is the
+ * sole write for POST /api/investors/pipeline-stage.
+ */
 export async function dualWriteInvestorPipelineStage(
   params: DualWriteInvestorPipelineStageParams
 ): Promise<void> {
@@ -31,42 +33,20 @@ export async function dualWriteInvestorPipelineStage(
 
   const stageEnum = pipelineStageLabelToEnum(stageLabel);
   if (!stageEnum) {
-    console.warn(
-      `[investors-dual-write] Unrecognized pipeline stage label ${JSON.stringify(stageLabel)} — skipping dual-write.`
-    );
-    return;
+    throw new Error(`Unrecognized pipeline stage label ${JSON.stringify(stageLabel)}`);
   }
 
-  let org: { id: string } | null;
-  try {
-    org = await prisma.organization.findUnique({
-      where: { kissingerId: kissingerFirmId },
-      select: { id: true },
-    });
-  } catch (err) {
-    console.warn(
-      `[investors-dual-write] Organization lookup failed for "${kissingerFirmId}":`,
-      err instanceof Error ? err.message : err
-    );
-    return;
-  }
+  const org = await prisma.organization.findUnique({
+    where: { kissingerId: kissingerFirmId },
+    select: { id: true },
+  });
 
   if (!org) {
-    console.warn(
-      `[investors-dual-write] No Postgres Organization row for Kissinger entity "${kissingerFirmId}" yet — skipping dual-write.`
-    );
-    return;
+    throw new Error(`No Postgres Organization row for entity "${kissingerFirmId}"`);
   }
 
-  try {
-    await prisma.organization.update({
-      where: { id: org.id },
-      data: { investorPipeline: stageEnum, investorPipelineUpdatedAt: new Date() },
-    });
-  } catch (err) {
-    console.warn(
-      "[investors-dual-write] dualWriteInvestorPipelineStage update failed:",
-      err instanceof Error ? err.message : err
-    );
-  }
+  await prisma.organization.update({
+    where: { id: org.id },
+    data: { investorPipeline: stageEnum, investorPipelineUpdatedAt: new Date() },
+  });
 }

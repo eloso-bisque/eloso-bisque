@@ -2,13 +2,13 @@
  * POST /api/investors/pipeline-stage
  *
  * Update the fundraising pipeline stage for an investor firm.
- * Stage is stored as meta.pipeline_stage on the entity.
+ * Postgres is the sole write (Kissinger disconnected from the live path —
+ * see src/lib/investors-dual-write.ts's module doc).
  *
  * Body: { firmId: string, stage: string }
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { updatePipelineStage } from "@/lib/kissinger";
 import { dualWriteInvestorPipelineStage } from "@/lib/investors-dual-write";
 
 const VALID_STAGES = new Set([
@@ -41,14 +41,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const ok = await updatePipelineStage(firmId, stage);
-  if (!ok) {
+  try {
+    await dualWriteInvestorPipelineStage({ kissingerFirmId: firmId, stageLabel: stage });
+  } catch (err) {
+    console.error("Failed to update pipeline stage:", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "Failed to update stage" }, { status: 500 });
   }
-
-  // Dual-write to Postgres (Prisma Phase 3.5, GH #45) — never blocks or
-  // fails this request; Kissinger above is the operation of record.
-  await dualWriteInvestorPipelineStage({ kissingerFirmId: firmId, stageLabel: stage });
 
   return NextResponse.json({ ok: true, firmId, stage });
 }

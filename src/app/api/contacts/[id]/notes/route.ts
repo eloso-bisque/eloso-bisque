@@ -2,46 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { dualWriteUpdateNotes } from "@/lib/contacts-dual-write";
 
-const KISSINGER_API_URL =
-  process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
-const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
-
-const UPDATE_ENTITY_NOTES_MUTATION = `
-  mutation UpdateEntityNotes($id: String!, $input: UpdateEntityInput!) {
-    updateEntity(id: $id, input: $input) {
-      id
-      notes
-      updatedAt
-    }
-  }
-`;
-
-async function gqlMutate(query: string, variables: Record<string, unknown>) {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (KISSINGER_API_TOKEN) {
-    headers["Authorization"] = `Bearer ${KISSINGER_API_TOKEN}`;
-  }
-
-  const res = await fetch(KISSINGER_API_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ query, variables }),
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    throw new Error(`Kissinger request failed: ${res.status} ${res.statusText}`);
-  }
-
-  const json = (await res.json()) as { data?: unknown; errors?: unknown[] };
-  if (json.errors && json.errors.length > 0) {
-    throw new Error(`Kissinger errors: ${JSON.stringify(json.errors)}`);
-  }
-  return json.data;
-}
-
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -64,12 +24,8 @@ export async function PATCH(
 
   try {
     const decodedId = decodeURIComponent(id);
-    await gqlMutate(UPDATE_ENTITY_NOTES_MUTATION, {
-      id: decodedId,
-      input: { notes: body.notes },
-    });
-    // Dual-write to Postgres (Prisma Phase 3.3, GH #44) — never blocks or
-    // fails this request; Kissinger above is the operation of record.
+    // Postgres is the sole write for notes updates (Kissinger disconnected
+    // from the live path — see src/lib/contacts-dual-write.ts's module doc).
     await dualWriteUpdateNotes({ kissingerId: decodedId, notes: body.notes });
     revalidateTag("contacts");
     return NextResponse.json({ ok: true });

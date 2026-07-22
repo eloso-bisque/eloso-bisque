@@ -1,52 +1,57 @@
 import Link from "next/link";
-import { fetchKissingerFunnelData, VelocityMetric } from "@/lib/kissinger";
+import { fetchHomepageStatsFromPostgres, type VelocityMetric } from "@/lib/homepage-stats-read";
+
+export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const kissinger = await fetchKissingerFunnelData();
+  // Postgres-backed stats (Kissinger disconnected from the live path — see
+  // src/lib/homepage-stats-read.ts's module doc). These are plain row
+  // counts, not a graph query, so there's a direct Postgres equivalent.
+  const stats = await fetchHomepageStatsFromPostgres();
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 md:space-y-8">
       <h1 className="text-2xl md:text-3xl font-bold text-bisque-900">Dashboard</h1>
 
-      {/* Kissinger stats — 2-col on mobile, 4-col on sm+ */}
+      {/* CRM stats — 2-col on mobile, 4-col on sm+ */}
       <section>
         <h2 className="text-base md:text-xl font-semibold text-bisque-800 mb-3 md:mb-4">
-          Kissinger CRM
+          Eloso CRM
         </h2>
-        {kissinger ? (
+        {stats ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4">
             <Link href="/contacts?segment=people">
               <StatCard
                 label="Contacts"
-                value={kissinger.totalContacts}
-                velocity={kissinger.velocity.contacts}
+                value={stats.totalContacts}
+                velocity={stats.velocity.contacts}
               />
             </Link>
             <Link href="/contacts?segment=other-orgs">
               <StatCard
                 label="Orgs"
-                value={kissinger.totalOrgs}
-                velocity={kissinger.velocity.orgs}
+                value={stats.totalOrgs}
+                velocity={stats.velocity.orgs}
               />
             </Link>
             <Link href="/contacts?segment=all">
               <StatCard
                 label="Entities"
-                value={kissinger.stats.totalEntities}
-                velocity={kissinger.velocity.totalEntities}
+                value={stats.totalEntities}
+                velocity={stats.velocity.totalEntities}
               />
             </Link>
             <Link href="/contacts">
               <StatCard
                 label="Connections"
-                value={kissinger.stats.totalEdges}
-                velocity={kissinger.velocity.totalEdges}
+                value={stats.totalEdges}
+                velocity={stats.velocity.totalEdges}
               />
             </Link>
           </div>
         ) : (
           <p className="text-bisque-600 italic text-sm">
-            Kissinger is offline — stats unavailable.
+            Stats unavailable — database unreachable.
           </p>
         )}
       </section>

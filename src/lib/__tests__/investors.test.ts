@@ -216,7 +216,13 @@ describe("Pipeline stage API route", () => {
     expect(src).toContain("Term Sheet");
   });
 
-  it("uses updatePipelineStage from kissinger lib", () => {
-    expect(src).toContain("updatePipelineStage");
+  it("writes the pipeline stage via dualWriteInvestorPipelineStage (Postgres is the sole write since the Kissinger disconnect)", () => {
+    expect(src).toContain("dualWriteInvestorPipelineStage");
+  });
+
+  it("no longer calls Kissinger's updatePipelineStage or any Kissinger endpoint", () => {
+    expect(src).not.toContain("updatePipelineStage");
+    expect(src).not.toContain("KISSINGER_API_URL");
+    expect(src).not.toContain("@/lib/kissinger");
   });
 });

@@ -12,13 +12,14 @@
  *     enum value matching the UI stage label ("Meeting Booked" ->
  *     MeetingBooked).
  *   - Also stamps `funnelStageUpdatedAt` with the current time.
- *   - An unrecognized stage label is skipped (logged), never guessed into
- *     a default enum value or allowed to throw.
- *   - An org not yet backfilled into Postgres (no matching kissingerId) is
- *     skipped (logged), never treated as an error.
- *   - A Postgres outage/error during the lookup or update is caught and
- *     logged — dual-write helpers must NEVER throw, since Kissinger
- *     remains the write of record during this phase.
+ *   - An unrecognized stage label throws — never guessed into a default
+ *     enum value.
+ *   - An org with no matching kissingerId throws.
+ *   - Since Kissinger has been disconnected from this route's live path,
+ *     Postgres is the sole write of record — a Postgres outage during the
+ *     lookup or update must throw so the caller (PATCH
+ *     /api/contacts/[id]/stage) can surface a real error instead of
+ *     silently no-op'ing.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -80,39 +81,39 @@ describe("dualWriteFunnelStage", () => {
     }
   });
 
-  it("skips the write (never throws) for an unrecognized stage label", async () => {
+  it("throws for an unrecognized stage label", async () => {
     orgFindUniqueMock.mockResolvedValue({ id: "pg-org-1" });
 
     await expect(
       dualWriteFunnelStage({ kissingerOrgId: "kis-org-1", stageLabel: "Not A Real Stage" })
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow();
     expect(orgUpdateMock).not.toHaveBeenCalled();
   });
 
-  it("skips the write (never throws) when the org hasn't been backfilled into Postgres yet", async () => {
+  it("throws when the org does not exist in Postgres", async () => {
     orgFindUniqueMock.mockResolvedValue(null);
 
     await expect(
       dualWriteFunnelStage({ kissingerOrgId: "kis-org-unknown", stageLabel: "Contacted" })
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow();
     expect(orgUpdateMock).not.toHaveBeenCalled();
   });
 
-  it("never throws when the Postgres lookup fails", async () => {
+  it("throws when the Postgres lookup fails", async () => {
     orgFindUniqueMock.mockRejectedValue(new Error("connection refused"));
 
     await expect(
       dualWriteFunnelStage({ kissingerOrgId: "kis-org-1", stageLabel: "Contacted" })
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("connection refused");
     expect(orgUpdateMock).not.toHaveBeenCalled();
   });
 
-  it("never throws when the Postgres update fails", async () => {
+  it("throws when the Postgres update fails", async () => {
     orgFindUniqueMock.mockResolvedValue({ id: "pg-org-1" });
     orgUpdateMock.mockRejectedValue(new Error("connection refused"));
 
     await expect(
       dualWriteFunnelStage({ kissingerOrgId: "kis-org-1", stageLabel: "Contacted" })
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("connection refused");
   });
 });

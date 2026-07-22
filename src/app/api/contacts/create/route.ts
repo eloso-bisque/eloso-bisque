@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
+import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { dualWriteCreateEntity } from "@/lib/contacts-dual-write";
+import { dualWriteCreateEntity, withOrganizationNote } from "@/lib/contacts-dual-write";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,74 +22,6 @@ interface EnrichedContact {
   organization?: string;
   linkedin_url?: string;
   notes?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Kissinger GraphQL mutation
-// ---------------------------------------------------------------------------
-
-const KISSINGER_API_URL =
-  process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
-const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
-
-const CREATE_ENTITY_MUTATION = `
-  mutation CreateEntity($input: CreateEntityInput!) {
-    createEntity(input: $input) {
-      id
-      kind
-      name
-      tags
-      notes
-      meta { key value }
-      createdAt
-      updatedAt
-    }
-  }
-`;
-
-async function createEntityInKissinger(
-  kind: "person" | "org",
-  name: string,
-  meta: { key: string; value: string }[],
-  notes?: string
-): Promise<{ id: string; name: string } | null> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (KISSINGER_API_TOKEN) {
-    headers["Authorization"] = `Bearer ${KISSINGER_API_TOKEN}`;
-  }
-
-  const res = await fetch(KISSINGER_API_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      query: CREATE_ENTITY_MUTATION,
-      variables: {
-        input: {
-          kind,
-          name,
-          notes: notes ?? "",
-          meta: meta.length > 0 ? meta : undefined,
-        },
-      },
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Kissinger request failed: ${res.status} ${res.statusText}`);
-  }
-
-  const json = (await res.json()) as {
-    data?: { createEntity: { id: string; name: string } };
-    errors?: unknown[];
-  };
-
-  if (json.errors && json.errors.length > 0) {
-    throw new Error(`Kissinger errors: ${JSON.stringify(json.errors)}`);
-  }
-
-  return json.data?.createEntity ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,32 +120,28 @@ export async function POST(request: NextRequest) {
     // Step 1: AI enrichment
     const enriched = await enrichWithClaude({ ...body, kind });
 
-    // Step 2: Build meta fields from enriched data
-    const meta: { key: string; value: string }[] = [];
-    if (enriched.email) meta.push({ key: "email", value: enriched.email });
-    if (enriched.organization)
-      meta.push({ key: "company", value: enriched.organization });
-    if (enriched.linkedin_url)
-      meta.push({ key: "linkedin", value: enriched.linkedin_url });
-
-    // Step 3: Determine name (required by Kissinger)
+    // Step 2: Determine name (kept required — same validation Kissinger used to enforce)
     const name = enriched.name || enriched.organization || enriched.email || "Unknown";
 
-    // Step 4: Save to Kissinger
-    const created = await createEntityInKissinger(kind, name, meta, enriched.notes);
-
-    // Step 5: Dual-write to Postgres (Prisma Phase 3.3, GH #44) — never
-    // blocks or fails this request; Kissinger above is the operation of
-    // record during the dual-write period.
-    if (created) {
-      await dualWriteCreateEntity({
-        kissingerId: created.id,
-        kind,
-        name: created.name,
-        email: enriched.email,
-        notes: enriched.notes,
-      });
-    }
+    // Step 3: Save to Postgres — the sole write since the Kissinger dual-write
+    // cutover (Kissinger is no longer in the live create path; see
+    // src/lib/contacts-dual-write.ts's module doc). `kissingerId` used to be
+    // assigned by Kissinger's createEntity mutation; entities created from
+    // this point on self-mint a stable external id instead so contacts/[id]
+    // routing and every kissingerId-keyed read path continue to work
+    // unchanged. The free-text "organization" field (kind=person's employer
+    // name) used to be stored as a Kissinger meta value only — it has no
+    // Postgres column, so it's folded into notes instead of silently lost.
+    const id = randomUUID();
+    await dualWriteCreateEntity({
+      kissingerId: id,
+      kind,
+      name,
+      email: enriched.email,
+      linkedinUrl: enriched.linkedin_url,
+      notes: withOrganizationNote(enriched.notes, enriched.organization),
+    });
+    const created = { id, name };
 
     // Invalidate contacts and funnel caches so the new contact appears immediately
     revalidateTag("contacts");
