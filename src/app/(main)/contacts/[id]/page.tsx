@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { fetchContactDetail, classifyOrg } from "@/lib/kissinger";
+import { classifyOrg } from "@/lib/kissinger";
 import type { ResolvedEdge, ContactDetail, PersonAtOrg } from "@/lib/kissinger";
+import { fetchContactDetailFromPostgres } from "@/lib/contact-detail-read";
 import NotesEditor from "@/components/NotesEditor";
 import EnrichButton from "@/components/EnrichButton";
 import MobileEnrichSection from "@/components/MobileEnrichSection";
@@ -13,88 +14,28 @@ import ContactDetailTabs from "@/components/ContactDetailTabs";
 
 // ---------------------------------------------------------------------------
 // Server-side score computation using already-fetched contact data
+//
+// Previously this made two additional Kissinger GraphQL round-trips
+// (interactionsForEntity for `last_interaction_at`, and a per-works_at-edge
+// entity() lookup for target org tags). Both are now sourced from the
+// Postgres data `fetchContactDetailFromPostgres` already fetched in one
+// query (Prisma Phase 3.6, GH #46) — this page no longer calls Kissinger
+// at all.
 // ---------------------------------------------------------------------------
 
-const KISSINGER_API_URL =
-  process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
-const KISSINGER_API_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
-
-async function gqlFetch<T = unknown>(
-  query: string,
-  variables: Record<string, unknown> = {}
-): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (KISSINGER_API_TOKEN) headers["Authorization"] = `Bearer ${KISSINGER_API_TOKEN}`;
-  const res = await fetch(KISSINGER_API_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ query, variables }),
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`Kissinger request failed: ${res.status}`);
-  const json = (await res.json()) as { data?: T; errors?: unknown[] };
-  if (json.errors?.length) throw new Error(`Kissinger errors: ${JSON.stringify(json.errors)}`);
-  return json.data as T;
-}
-
-const INTERACTIONS_QUERY = `
-  query InteractionsForScore($entityId: String!, $first: Int) {
-    interactionsForEntity(entityId: $entityId, first: $first) {
-      edges { node { id occurredAt } }
-    }
-  }
-`;
-
-const ENTITY_TAGS_QUERY = `
-  query EntityTags($id: String!) {
-    entity(id: $id) { id tags }
-  }
-`;
-
-async function fetchContactScore(
+function computeContactScore(
   contact: ContactDetail,
-  rawEdges: { target: string; relation: string; strength: number }[]
-): Promise<ScoreResult> {
-  // Fetch interactions and org tags in parallel
-  const worksAtEdges = rawEdges.filter((e) => e.relation === "works_at");
-
-  const [interactionsData, orgTagResults] = await Promise.all([
-    gqlFetch<{ interactionsForEntity: { edges: { node: { id: string; occurredAt: string } }[] } }>(
-      INTERACTIONS_QUERY,
-      { entityId: contact.id, first: 1 }
-    ).catch(() => ({ interactionsForEntity: { edges: [] } })),
-
-    Promise.allSettled(
-      worksAtEdges.map(async (edge) => {
-        const data = await gqlFetch<{ entity: { id: string; tags: string[] } }>(
-          ENTITY_TAGS_QUERY,
-          { id: edge.target }
-        );
-        return { id: edge.target, tags: data.entity.tags };
-      })
-    ),
-  ]);
-
-  const interactions = interactionsData.interactionsForEntity.edges.map((e) => e.node);
-  const mostRecentInteraction =
-    interactions.length > 0
-      ? interactions.reduce((latest, i) =>
-          Date.parse(i.occurredAt) > Date.parse(latest.occurredAt) ? i : latest
-        )
-      : null;
-
-  const orgTagsMap = new Map<string, string[]>();
-  for (const r of orgTagResults) {
-    if (r.status === "fulfilled") orgTagsMap.set(r.value.id, r.value.tags);
-  }
-
+  rawEdges: { target: string; relation: string; strength: number }[],
+  mostRecentInteractionAt: string | null,
+  orgTagsByKissingerId: Record<string, string[]>
+): ScoreResult {
   const orgTags: string[] = [];
-  for (const [, tags] of orgTagsMap) orgTags.push(...tags);
+  for (const tags of Object.values(orgTagsByKissingerId)) orgTags.push(...tags);
 
   const scoringEdges: ScoringEdge[] = rawEdges.map((edge) => ({
     relation: edge.relation,
     strength: edge.strength,
-    target_tags: orgTagsMap.get(edge.target) ?? [],
+    target_tags: orgTagsByKissingerId[edge.target] ?? [],
   }));
 
   return scoreContact({
@@ -105,7 +46,7 @@ async function fetchContactScore(
     notes: contact.notes,
     meta: contact.meta,
     updatedAt: contact.updatedAt,
-    last_interaction_at: mostRecentInteraction?.occurredAt,
+    last_interaction_at: mostRecentInteractionAt ?? undefined,
     edges: scoringEdges,
     org_tags: orgTags,
   });
@@ -120,17 +61,24 @@ export default async function ContactDetailPage({
 }: ContactDetailPageProps) {
   const { id: rawId } = await params;
   const id = decodeURIComponent(rawId);
-  const result = await fetchContactDetail(id);
+  const result = await fetchContactDetailFromPostgres(id);
 
   if (!result) notFound();
 
-  const { contact, edges, peopleAtOrg } = result;
+  const { contact, edges, peopleAtOrg, mostRecentInteractionAt, orgTagsByKissingerId } = result;
 
-  // Compute full contact score (with interactions + edge enrichment)
-  const scoreResult = await fetchContactScore(
-    contact,
-    edges.map((e) => ({ target: e.target, relation: e.relation, strength: e.strength }))
-  ).catch(() => null);
+  // Compute full contact score (Postgres-sourced interactions + edge org tags)
+  let scoreResult: ScoreResult | null;
+  try {
+    scoreResult = computeContactScore(
+      contact,
+      edges.map((e) => ({ target: e.target, relation: e.relation, strength: e.strength })),
+      mostRecentInteractionAt,
+      orgTagsByKissingerId
+    );
+  } catch {
+    scoreResult = null;
+  }
 
   // For prospect orgs: also compute ICP score
   const isProspect = contact.kind === "org" && classifyOrg(contact.tags) === "prospects";

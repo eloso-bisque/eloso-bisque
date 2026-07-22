@@ -21,8 +21,11 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FUNNEL_STAGES, type FunnelContact, type FunnelKanbanData, type FunnelStage } from "@/lib/kissinger";
+import { FUNNEL_STAGE_ORDER, funnelStageToLabel, type FunnelOrgCard, type FunnelKanbanBoard } from "@/lib/funnel-stage";
 import { format, parseISO } from "date-fns";
+
+const FUNNEL_STAGES = FUNNEL_STAGE_ORDER.map(funnelStageToLabel);
+type FunnelStage = (typeof FUNNEL_STAGES)[number];
 
 // ---------------------------------------------------------------------------
 // Stage config
@@ -59,17 +62,21 @@ const STAGE_DOTS: Record<FunnelStage, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// ICP score helpers (tag-based heuristic)
+// ICP badge — real Organization.fitTier (Prisma Phase 3.6, GH #46), replacing
+// the previous tag-based heuristic (`icp-high`/`icp-med` tags, which real
+// prod data confirms were never actually set — see funnel-read.ts's module
+// doc for the broader "this board had zero real usage" finding).
 // ---------------------------------------------------------------------------
 
-function getIcpTier(tags: string[]): "High" | "Med" | "Low" {
-  const t = tags.map((s) => s.toLowerCase());
-  if (t.includes("icp-high") || t.includes("icp:high")) return "High";
-  if (t.includes("icp-med") || t.includes("icp:med")) return "Med";
+type IcpTier = "High" | "Med" | "Low";
+
+function fitTierToIcpTier(fitTier: string | null): IcpTier {
+  if (fitTier === "high") return "High";
+  if (fitTier === "medium") return "Med";
   return "Low";
 }
 
-const ICP_BADGE: Record<"High" | "Med" | "Low", string> = {
+const ICP_BADGE: Record<IcpTier, string> = {
   High: "bg-emerald-100 text-emerald-700",
   Med:  "bg-amber-100 text-amber-700",
   Low:  "bg-zinc-100 text-zinc-500",
@@ -80,14 +87,14 @@ const ICP_BADGE: Record<"High" | "Med" | "Low", string> = {
 // ---------------------------------------------------------------------------
 
 interface FunnelCardProps {
-  contact: FunnelContact;
+  org: FunnelOrgCard;
   isDragging?: boolean;
 }
 
-function FunnelCard({ contact, isDragging }: FunnelCardProps) {
-  const icp = getIcpTier(contact.tags);
+function FunnelCard({ org, isDragging }: FunnelCardProps) {
+  const icp = fitTierToIcpTier(org.fitTier);
   const date = (() => {
-    try { return format(parseISO(contact.updatedAt), "MMM d"); } catch { return ""; }
+    try { return format(parseISO(org.updatedAt), "MMM d"); } catch { return ""; }
   })();
 
   return (
@@ -99,14 +106,11 @@ function FunnelCard({ contact, isDragging }: FunnelCardProps) {
       `}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-semibold text-zinc-900 leading-tight truncate">{contact.name}</p>
+        <p className="text-sm font-semibold text-zinc-900 leading-tight truncate">{org.name}</p>
         <span className={`flex-shrink-0 text-xs font-medium px-1.5 py-0.5 rounded ${ICP_BADGE[icp]}`}>{icp}</span>
       </div>
-      {contact.company && (
-        <p className="text-xs text-zinc-500 truncate">{contact.company}</p>
-      )}
-      {contact.title && (
-        <p className="text-xs text-zinc-400 truncate">{contact.title}</p>
+      {org.subtitle && (
+        <p className="text-xs text-zinc-500 truncate">{org.subtitle}</p>
       )}
       {date && (
         <p className="text-xs text-zinc-300 pt-0.5">{date}</p>
@@ -119,10 +123,10 @@ function FunnelCard({ contact, isDragging }: FunnelCardProps) {
 // Sortable wrapper
 // ---------------------------------------------------------------------------
 
-function SortableFunnelCard({ contact }: { contact: FunnelContact }) {
+function SortableFunnelCard({ org }: { org: FunnelOrgCard }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: contact.id,
-    data: { stage: contact.funnelStage, contact },
+    id: org.id,
+    data: { stage: org.funnelStage, org },
   });
 
   const style = {
@@ -133,7 +137,7 @@ function SortableFunnelCard({ contact }: { contact: FunnelContact }) {
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
-      <FunnelCard contact={contact} />
+      <FunnelCard org={org} />
     </div>
   );
 }
@@ -144,13 +148,13 @@ function SortableFunnelCard({ contact }: { contact: FunnelContact }) {
 
 function KanbanColumn({
   stage,
-  contacts,
+  orgs,
 }: {
   stage: FunnelStage;
-  contacts: FunnelContact[];
+  orgs: FunnelOrgCard[];
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
-  const ids = contacts.map((c) => c.id);
+  const ids = orgs.map((c) => c.id);
 
   return (
     <div className={`
@@ -164,7 +168,7 @@ function KanbanColumn({
           <span className={`w-2 h-2 rounded-full ${STAGE_DOTS[stage]}`} />
           <span className="text-xs font-semibold uppercase tracking-wide">{stage}</span>
         </div>
-        <span className="text-xs font-bold opacity-60">{contacts.length}</span>
+        <span className="text-xs font-bold opacity-60">{orgs.length}</span>
       </div>
 
       {/* Cards */}
@@ -173,11 +177,11 @@ function KanbanColumn({
         className="flex flex-col gap-2 p-2 flex-1 min-h-[120px]"
       >
         <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-          {contacts.map((c) => (
-            <SortableFunnelCard key={c.id} contact={c} />
+          {orgs.map((c) => (
+            <SortableFunnelCard key={c.id} org={c} />
           ))}
         </SortableContext>
-        {contacts.length === 0 && (
+        {orgs.length === 0 && (
           <div className="flex items-center justify-center h-16 text-xs text-zinc-300 select-none">
             Drop here
           </div>
@@ -205,7 +209,7 @@ function FilterBar({ icpFilter, onIcpFilter, search, onSearch }: FilterBarProps)
     <div className="flex flex-wrap items-center gap-3 mb-4">
       <input
         type="text"
-        placeholder="Filter by name or company…"
+        placeholder="Filter by name or industry…"
         value={search}
         onChange={(e) => onSearch(e.target.value)}
         className="px-3 py-1.5 rounded-lg border border-bisque-200 bg-white text-sm text-bisque-900 focus:outline-none focus:ring-2 focus:ring-bisque-400 w-52"
@@ -235,12 +239,12 @@ function FilterBar({ icpFilter, onIcpFilter, search, onSearch }: FilterBarProps)
 // ---------------------------------------------------------------------------
 
 interface FunnelKanbanProps {
-  initialData: FunnelKanbanData;
+  initialData: FunnelKanbanBoard;
 }
 
 export default function FunnelKanban({ initialData }: FunnelKanbanProps) {
-  const [data, setData] = useState<FunnelKanbanData>(initialData);
-  const [activeContact, setActiveContact] = useState<FunnelContact | null>(null);
+  const [data, setData] = useState<FunnelKanbanBoard>(initialData);
+  const [activeOrg, setActiveOrg] = useState<FunnelOrgCard | null>(null);
   const [icpFilter, setIcpFilter] = useState<IcpFilter>("All");
   const [search, setSearch] = useState("");
 
@@ -249,25 +253,25 @@ export default function FunnelKanban({ initialData }: FunnelKanbanProps) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Build a flat contact lookup
-  const allContacts: Record<string, FunnelContact> = {};
+  // Build a flat org lookup
+  const allOrgs: Record<string, FunnelOrgCard> = {};
   for (const stage of FUNNEL_STAGES) {
-    for (const c of data[stage]) {
-      allContacts[c.id] = c;
+    for (const c of data[stage] ?? []) {
+      allOrgs[c.id] = c;
     }
   }
 
-  function findStageOfContact(id: string): FunnelStage | null {
+  function findStageOfOrg(id: string): FunnelStage | null {
     for (const stage of FUNNEL_STAGES) {
-      if (data[stage].some((c) => c.id === id)) return stage;
+      if ((data[stage] ?? []).some((c) => c.id === id)) return stage;
     }
     return null;
   }
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
-    const contact = allContacts[event.active.id as string];
-    if (contact) setActiveContact(contact);
-  }, [allContacts]);
+    const org = allOrgs[event.active.id as string];
+    if (org) setActiveOrg(org);
+  }, [allOrgs]);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
@@ -276,21 +280,21 @@ export default function FunnelKanban({ initialData }: FunnelKanbanProps) {
     const activeId = active.id as string;
     const overId = over.id as string;
 
-    const activeStage = findStageOfContact(activeId);
-    // over.id can be a stage (column drop zone) or a contact id
+    const activeStage = findStageOfOrg(activeId);
+    // over.id can be a stage (column drop zone) or an org id
     const overStage: FunnelStage | null = (FUNNEL_STAGES as readonly string[]).includes(overId)
       ? (overId as FunnelStage)
-      : findStageOfContact(overId);
+      : findStageOfOrg(overId);
 
     if (!activeStage || !overStage || activeStage === overStage) return;
 
     setData((prev) => {
-      const contact = prev[activeStage].find((c) => c.id === activeId);
-      if (!contact) return prev;
+      const org = (prev[activeStage] ?? []).find((c) => c.id === activeId);
+      if (!org) return prev;
       return {
         ...prev,
-        [activeStage]: prev[activeStage].filter((c) => c.id !== activeId),
-        [overStage]: [...prev[overStage], { ...contact, funnelStage: overStage }],
+        [activeStage]: (prev[activeStage] ?? []).filter((c) => c.id !== activeId),
+        [overStage]: [...(prev[overStage] ?? []), { ...org, funnelStage: overStage }],
       };
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -298,7 +302,7 @@ export default function FunnelKanban({ initialData }: FunnelKanbanProps) {
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
-    setActiveContact(null);
+    setActiveOrg(null);
     if (!over) return;
 
     const activeId = active.id as string;
@@ -306,11 +310,14 @@ export default function FunnelKanban({ initialData }: FunnelKanbanProps) {
 
     const newStage: FunnelStage | null = (FUNNEL_STAGES as readonly string[]).includes(overId)
       ? (overId as FunnelStage)
-      : findStageOfContact(overId);
+      : findStageOfOrg(overId);
 
     if (!newStage) return;
 
-    // Persist to API (fire-and-forget with optimistic state already applied)
+    // Persist to API (fire-and-forget with optimistic state already applied).
+    // `activeId` is an Organization's kissingerId as of GH #46 (see
+    // funnel-dual-write.ts's module doc for why the route path is
+    // unchanged).
     fetch(`/api/contacts/${activeId}/stage`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -320,19 +327,19 @@ export default function FunnelKanban({ initialData }: FunnelKanbanProps) {
   }, [data]);
 
   // Apply filters
-  const filteredData: FunnelKanbanData = Object.fromEntries(
+  const filteredData: FunnelKanbanBoard = Object.fromEntries(
     FUNNEL_STAGES.map((stage) => {
-      const contacts = data[stage].filter((c) => {
-        if (icpFilter !== "All" && getIcpTier(c.tags) !== icpFilter) return false;
+      const orgs = (data[stage] ?? []).filter((c) => {
+        if (icpFilter !== "All" && fitTierToIcpTier(c.fitTier) !== icpFilter) return false;
         if (search) {
           const q = search.toLowerCase();
-          if (!c.name.toLowerCase().includes(q) && !c.company.toLowerCase().includes(q)) return false;
+          if (!c.name.toLowerCase().includes(q) && !c.subtitle.toLowerCase().includes(q)) return false;
         }
         return true;
       });
-      return [stage, contacts];
+      return [stage, orgs];
     })
-  ) as FunnelKanbanData;
+  );
 
   return (
     <div>
@@ -356,13 +363,13 @@ export default function FunnelKanban({ initialData }: FunnelKanbanProps) {
               <KanbanColumn
                 key={stage}
                 stage={stage}
-                contacts={filteredData[stage]}
+                orgs={filteredData[stage] ?? []}
               />
             ))}
           </div>
 
           <DragOverlay>
-            {activeContact ? <FunnelCard contact={activeContact} isDragging /> : null}
+            {activeOrg ? <FunnelCard org={activeOrg} isDragging /> : null}
           </DragOverlay>
         </DndContext>
       </div>

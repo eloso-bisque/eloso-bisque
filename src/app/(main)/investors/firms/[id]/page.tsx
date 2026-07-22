@@ -11,8 +11,8 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { fetchInvestorFirmDetail } from "@/lib/kissinger";
 import type { PersonAtOrg } from "@/lib/kissinger";
+import { fetchContactDetailFromPostgres } from "@/lib/contact-detail-read";
 import { fetchInvestorFirmFieldsByKissingerId, overrideFirmMetaWithPostgres } from "@/lib/investors-read";
 import EnrichButton from "@/components/EnrichButton";
 import { scoreInvestor } from "@/lib/score-contact";
@@ -61,16 +61,18 @@ interface FirmDetailPageProps {
 export default async function FirmDetailPage({ params }: FirmDetailPageProps) {
   const { id: rawId } = await params;
   const id = decodeURIComponent(rawId);
-  const result = await fetchInvestorFirmDetail(id);
+  const result = await fetchContactDetailFromPostgres(id);
 
   if (!result) notFound();
 
   const { contact: firm, edges, peopleAtOrg } = result;
 
-  // Investor-specific fields are Postgres-sourced (Prisma Phase 3.5, GH #45)
-  // — relationship-graph data above (edges, peopleAtOrg) stays on Kissinger,
-  // owned by GH #46. Falls back to the Kissinger meta unchanged if the org
-  // hasn't been backfilled into Postgres yet or the lookup fails.
+  // Investor-specific fields are Postgres-sourced (Prisma Phase 3.5, GH #45).
+  // As of Prisma Phase 3.6 (GH #46), relationship-graph data above
+  // (edges, peopleAtOrg) and the base meta fields (hq/website/etc.) are
+  // ALSO Postgres-sourced (fetchContactDetailFromPostgres) — this page no
+  // longer calls Kissinger at all. Falls back to the base meta unchanged
+  // if the org's investor-specific fields lookup fails.
   const pgFirmFields = await fetchInvestorFirmFieldsByKissingerId(firm.id);
   const meta = overrideFirmMetaWithPostgres(firm.meta, pgFirmFields);
 
