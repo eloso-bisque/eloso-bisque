@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { kv } from '@vercel/kv';
 import { getUserByEmail, verifyPassword } from '@/lib/users';
 import { signToken, COOKIE_NAME, SEVEN_DAYS } from '@/lib/auth';
+import { logActivityEvent } from '@/lib/activity-log';
 
 export async function POST(request: NextRequest) {
   let body: { email?: string; password?: string };
@@ -47,6 +48,11 @@ export async function POST(request: NextRequest) {
     // Non-critical — don't fail login if tracking fails
     console.warn('[login] Activity tracking failed:', trackErr);
   }
+
+  // Dual-write to Postgres ActivityLog (Prisma Phase 3.1 migration).
+  // logActivityEvent never throws — KV remains the source of truth until
+  // the Activity Dashboard cutover has been stable for a while.
+  await logActivityEvent({ email: user.email, eventType: 'Login' });
 
   const response = NextResponse.json({ ok: true });
   response.cookies.set(COOKIE_NAME, token, {
