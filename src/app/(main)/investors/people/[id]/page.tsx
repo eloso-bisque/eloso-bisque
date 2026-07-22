@@ -10,7 +10,7 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { fetchInvestorPersonDetail } from "@/lib/kissinger";
+import { fetchContactDetailFromPostgres } from "@/lib/contact-detail-read";
 import { fetchInvestorPersonFieldsByKissingerId, overridePersonMetaWithPostgres } from "@/lib/investors-read";
 import EnrichButton from "@/components/EnrichButton";
 import { scoreInvestor } from "@/lib/score-contact";
@@ -110,16 +110,18 @@ interface PersonDetailPageProps {
 export default async function PersonDetailPage({ params }: PersonDetailPageProps) {
   const { id: rawId } = await params;
   const id = decodeURIComponent(rawId);
-  const result = await fetchInvestorPersonDetail(id);
+  const result = await fetchContactDetailFromPostgres(id);
 
   if (!result) notFound();
 
   const { contact: person, edges } = result;
 
-  // Investor-specific fields are Postgres-sourced (Prisma Phase 3.5, GH #45)
-  // — relationship-graph data above (edges/works_at) stays on Kissinger,
-  // owned by GH #46. Falls back to the Kissinger meta unchanged if the
-  // contact hasn't been backfilled into Postgres yet or the lookup fails.
+  // Investor-specific fields are Postgres-sourced (Prisma Phase 3.5, GH #45).
+  // As of Prisma Phase 3.6 (GH #46), relationship-graph data above
+  // (edges/works_at) and the base meta fields are ALSO Postgres-sourced
+  // (fetchContactDetailFromPostgres) — this page no longer calls Kissinger
+  // at all. Falls back to the base meta unchanged if the contact's
+  // investor-specific fields lookup fails.
   const pgPersonFields = await fetchInvestorPersonFieldsByKissingerId(person.id);
   const meta = overridePersonMetaWithPostgres(person.meta, pgPersonFields);
 

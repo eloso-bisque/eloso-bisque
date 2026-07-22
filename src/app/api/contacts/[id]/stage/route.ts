@@ -5,6 +5,7 @@ import {
   FUNNEL_STAGES,
   type FunnelStage,
 } from "@/lib/kissinger";
+import { dualWriteFunnelStage } from "@/lib/funnel-dual-write";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -39,6 +40,13 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       { status: 500 }
     );
   }
+
+  // Dual-write to Postgres (Prisma Phase 3.6, GH #46) — never blocks or
+  // fails this request; Kissinger above remains the write of record.
+  // `id` is an Organization's kissingerId as of GH #46 (see
+  // funnel-dual-write.ts's module doc for why the Kanban tracks
+  // organizations rather than contacts).
+  await dualWriteFunnelStage({ kissingerOrgId: id, stageLabel: stage });
 
   revalidateTag("contacts");
   revalidateTag("funnel");

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import type { FunnelKanbanData } from "@/lib/kissinger";
+import type { FunnelKanbanBoard } from "@/lib/funnel-stage";
 
 // Lazy-load the kanban to keep the server bundle lean
 const FunnelKanban = dynamic(() => import("@/components/FunnelKanban"), {
@@ -163,7 +163,7 @@ function FunnelCalculator() {
 type Tab = "kanban" | "calculator";
 
 interface FunnelTabsProps {
-  initialKanbanData: FunnelKanbanData;
+  initialKanbanData: FunnelKanbanBoard;
 }
 
 export default function FunnelTabs({ initialKanbanData }: FunnelTabsProps) {
