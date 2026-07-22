@@ -4,6 +4,14 @@ import { revalidateTag } from "next/cache";
 import { verifyToken, COOKIE_NAME } from "@/lib/auth";
 import { recordOutreachTouch } from "@/lib/kissinger";
 import { logActivityEvent } from "@/lib/activity-log";
+import { dualWriteMarkSent } from "@/lib/outreach-dual-write";
+
+/** Map from login email to lowercase team member name (mirrors new-batch/route.ts). */
+const EMAIL_TO_ASSIGNEE: Record<string, string> = {
+  "drew@eloso.ai": "drew",
+  "ben@eloso.ai": "ben",
+  "jake@eloso.ai": "jake",
+};
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -150,6 +158,18 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           eventType: "OutreachTouchSent",
           contactId: id,
         });
+
+        // Dual-write to Postgres OutreachTouch + Contact/OutreachQueueEntry
+        // stage advance (Prisma Phase 3.2). Never throws — Kissinger's
+        // recordOutreachTouch above is the write of record.
+        const assigneeLower = EMAIL_TO_ASSIGNEE[session.email.toLowerCase()];
+        if (assigneeLower) {
+          await dualWriteMarkSent({
+            kissingerContactId: id,
+            touchNumber,
+            assigneeLower,
+          });
+        }
       }
     }
   } catch (trackErr) {

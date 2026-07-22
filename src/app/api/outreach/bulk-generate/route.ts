@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchProspectContacts, mergeEntityMeta } from "@/lib/kissinger";
 import { distributeContacts, type TeamMember } from "@/lib/outreach";
 import { generateOpusMessage } from "@/lib/outreach-generate";
+import { dualWriteGeneratedMessage, angleForAssignee } from "@/lib/outreach-dual-write";
 
 const MAX_ENTITY_IDS = 200;
 
@@ -151,6 +152,18 @@ export async function POST(request: NextRequest) {
         outreach_message_generated_at: new Date().toISOString(),
         outreach_message_sender: assignee.toLowerCase(),
       });
+
+      // Dual-write (Prisma Phase 3.2): version a GeneratedMessage row in
+      // Postgres alongside the Kissinger meta write above. Never throws.
+      const angle = angleForAssignee(assignee);
+      if (angle) {
+        await dualWriteGeneratedMessage({
+          kissingerContactId: contact.id,
+          angle,
+          messageBody: result.message,
+          generationMethod: result.source === "claude" ? "ai" : "template",
+        });
+      }
 
       results.push({
         entityId: contact.id,

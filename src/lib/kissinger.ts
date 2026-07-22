@@ -1983,6 +1983,40 @@ const RECORD_OUTREACH_RESPONSE_MUTATION = `
 export type ResponseType = "Interested" | "NotNow" | "WrongPerson" | "NoReply" | "Bounced";
 
 /**
+ * Kissinger's GraphQL `ResponseTypeGql` enum uses SCREAMING_SNAKE_CASE values
+ * ("INTERESTED", "NOT_NOW", ...), while the app's `ResponseType` uses
+ * PascalCase-ish values ("Interested", "NotNow", ...). Discovered via a live
+ * GraphQL introspection query against prod Kissinger (2026-07-22, during GH
+ * #43 manual testing) that `recordOutreachResponse` had been passing the
+ * app's casing straight through — Kissinger rejects it with "Invalid value
+ * for argument responseType" on every call, and the surrounding try/catch in
+ * `recordOutreachResponse` swallows that into a silent `null`, which the
+ * route then reports simply as "check Kissinger logs". This means the "Log
+ * Response" feature has been failing for every real call in production.
+ */
+const RESPONSE_TYPE_TO_KISSINGER_ENUM: Record<ResponseType, string> = {
+  Interested: "INTERESTED",
+  NotNow: "NOT_NOW",
+  WrongPerson: "WRONG_PERSON",
+  NoReply: "NO_REPLY",
+  Bounced: "BOUNCED",
+};
+
+const KISSINGER_ENUM_TO_RESPONSE_TYPE: Record<string, ResponseType> = Object.fromEntries(
+  Object.entries(RESPONSE_TYPE_TO_KISSINGER_ENUM).map(([app, kiss]) => [kiss, app as ResponseType])
+);
+
+/** Maps the app-level ResponseType to Kissinger's GraphQL enum casing. Pure — no I/O. */
+export function toKissingerResponseTypeEnum(responseType: ResponseType): string {
+  return RESPONSE_TYPE_TO_KISSINGER_ENUM[responseType];
+}
+
+/** Maps a Kissinger `ResponseTypeGql` enum value back to the app's ResponseType casing, if recognized. */
+export function fromKissingerResponseTypeEnum(kissingerValue: string): ResponseType | undefined {
+  return KISSINGER_ENUM_TO_RESPONSE_TYPE[kissingerValue];
+}
+
+/**
  * Record an outreach touch for a person, advancing the outreach stage.
  * touch_number must match the current stage (1 for cold, 2 for touched_1, 3 for touched_2).
  * Returns the new stage on success.
@@ -2013,8 +2047,16 @@ export async function recordOutreachResponse(
   try {
     const data = await gql<{
       recordOutreachResponse: { interactionId: string; responseType: string };
-    }>(RECORD_OUTREACH_RESPONSE_MUTATION, { personId, responseType, notes });
-    return data.recordOutreachResponse;
+    }>(RECORD_OUTREACH_RESPONSE_MUTATION, {
+      personId,
+      responseType: toKissingerResponseTypeEnum(responseType),
+      notes,
+    });
+    const result = data.recordOutreachResponse;
+    return {
+      interactionId: result.interactionId,
+      responseType: fromKissingerResponseTypeEnum(result.responseType) ?? result.responseType,
+    };
   } catch {
     return null;
   }

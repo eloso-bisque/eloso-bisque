@@ -37,6 +37,7 @@ import {
   type EntitySummary,
 } from "@/lib/kissinger";
 import { verifyToken } from "@/lib/auth";
+import { dualWriteNewBatchAssignment } from "@/lib/outreach-dual-write";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -381,6 +382,11 @@ export async function POST(request: Request) {
         addedIds.push(toAdd[i].id);
       }
     });
+
+    // Dual-write (Prisma Phase 3.2): mirror the queue:<assignee> assignment
+    // into OutreachQueueEntry rows. Never throws — Kissinger tags above are
+    // the write of record; this is additive instrumentation only.
+    await dualWriteNewBatchAssignment({ assigneeLower: assignee, kissingerContactIds: addedIds });
 
     // Bust cache so outreach page reloads fresh data
     revalidateTag("contacts");

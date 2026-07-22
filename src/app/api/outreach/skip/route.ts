@@ -14,6 +14,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
+import { dualWriteSkip } from "@/lib/outreach-dual-write";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -121,6 +122,11 @@ export async function POST(request: NextRequest) {
       id: entityId,
       input: { tags: newTags },
     });
+
+    // Dual-write (Prisma Phase 3.2): mirror the skip into
+    // OutreachQueueEntry.isActive=false, deactivatedReason="skipped". Never
+    // throws — the Kissinger tag update above is the write of record.
+    await dualWriteSkip({ kissingerContactId: entityId });
 
     // Bust the contacts cache so the outreach page reloads fresh data
     revalidateTag("contacts");
