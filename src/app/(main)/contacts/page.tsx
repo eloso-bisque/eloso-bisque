@@ -1,13 +1,18 @@
 import Link from "next/link";
 import {
   fetchContactsPage,
-  fetchAllEntities,
   fetchKissingerFunnelData,
   searchKissinger,
   classifyOrg,
   INVESTOR_PERSON_TAGS,
 } from "@/lib/kissinger";
 import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/lib/kissinger";
+import {
+  fetchOrgSegmentFromPostgres,
+  fetchOrgSegmentCountsFromPostgres,
+  fetchPeopleContactsFromPostgres,
+  fetchPeopleCountFromPostgres,
+} from "@/lib/contacts-read";
 import AddNewButton from "@/components/AddNewButton";
 import ContactCard from "@/components/ContactCard";
 import LazyScoreBadge from "@/components/LazyScoreBadge";
@@ -174,88 +179,97 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
     };
     contacts = segMap[segment];
     void searchHits;
-  } else {
-    // Fetch tab counts from graphStats (1 fast query)
+  } else if (segment === "all") {
+    // "All" tab still combines both kinds straight from Kissinger — not in
+    // scope for the Phase 3.3 read migration (GH #44 targets the People /
+    // VC / Prospects / Other Orgs segments specifically; see
+    // src/lib/contacts-read.ts for what moved and why).
     const funnelData = await fetchKissingerFunnelData();
     if (!funnelData) {
       offline = true;
     } else {
       const personCount = funnelData.stats.entitiesByKind["person"] ?? 0;
       const orgCount = funnelData.stats.entitiesByKind["org"] ?? 0;
-      // We don't know exact vc/prospects/other-orgs split without fetching all orgs.
-      // Show person count for People tab, org count for sub-tabs (approximation).
       tabCounts = {
         people: personCount,
-        vc: 0, // unknown without full fetch
-        prospects: 0, // unknown without full fetch
-        "other-orgs": orgCount, // approximate: all orgs shown here initially
+        vc: 0,
+        prospects: 0,
+        "other-orgs": orgCount,
         all: personCount + orgCount,
       };
     }
 
     if (!offline) {
-      // Determine which kind to fetch
-      const kind = segment === "people" ? "person" : "org";
-
-      if (segment === "all") {
-        // Fetch both kinds in parallel, interleave results
-        const [peoplePage, orgsPage] = await Promise.all([
-          fetchContactsPage("person", Math.ceil(PAGE_SIZE / 2), afterCursor),
-          fetchContactsPage("org", Math.floor(PAGE_SIZE / 2), afterCursor),
-        ]);
-        if (!peoplePage && !orgsPage) {
-          offline = true;
-        } else {
-          // Filter investor people out of contacts page
-          const filteredPeople = (peoplePage?.contacts ?? []).filter(
-            (p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t))
-          );
-          contacts = [...filteredPeople, ...(orgsPage?.contacts ?? [])];
-          // Sort alphabetically
-          contacts.sort((a, b) => a.name.localeCompare(b.name));
-          hasNextPage = (peoplePage?.hasNextPage ?? false) || (orgsPage?.hasNextPage ?? false);
-          endCursor = peoplePage?.endCursor ?? orgsPage?.endCursor ?? null;
-          hasPreviousPage = !!afterCursor;
-        }
-      } else if (segment === "people") {
-        // People tab: paginated fetch (7k+ people, we only need PAGE_SIZE at a time)
-        const page = await fetchContactsPage("person", PAGE_SIZE, afterCursor);
-        if (!page) {
-          offline = true;
-        } else {
-          contacts = page.contacts.filter(
-            (p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t))
-          );
-          hasNextPage = page.hasNextPage;
-          endCursor = page.endCursor;
-          hasPreviousPage = !!afterCursor;
-        }
+      const [peoplePage, orgsPage] = await Promise.all([
+        fetchContactsPage("person", Math.ceil(PAGE_SIZE / 2), afterCursor),
+        fetchContactsPage("org", Math.floor(PAGE_SIZE / 2), afterCursor),
+      ]);
+      if (!peoplePage && !orgsPage) {
+        offline = true;
       } else {
-        // Org sub-segments (vc, prospects, other-orgs):
-        // Kissinger has no server-side tag filter, and prospect-tagged orgs may appear
-        // anywhere in the 5,800+ org cursor order (e.g. beyond position 1,000).
-        // We must fetch ALL orgs and filter client-side to avoid missing any.
-        // fetchAllEntities is cached (TTL 120s) so this is one round-trip in practice.
-        try {
-          const allOrgs = await fetchAllEntities("org");
-          let raw = allOrgs;
+        // Filter investor people out of contacts page
+        const filteredPeople = (peoplePage?.contacts ?? []).filter(
+          (p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t))
+        );
+        contacts = [...filteredPeople, ...(orgsPage?.contacts ?? [])];
+        // Sort alphabetically
+        contacts.sort((a, b) => a.name.localeCompare(b.name));
+        hasNextPage = (peoplePage?.hasNextPage ?? false) || (orgsPage?.hasNextPage ?? false);
+        endCursor = peoplePage?.endCursor ?? orgsPage?.endCursor ?? null;
+        hasPreviousPage = !!afterCursor;
+      }
+    }
+  } else {
+    // People / VC / Prospects / Other Orgs tabs (Postgres, Phase 3.3): tab
+    // badges are computed from Postgres regardless of which of these four
+    // tabs is active, so switching tabs never depends on Kissinger being
+    // reachable. The "All" tab count is approximated as the sum of the other
+    // four (it stays disjoint by construction — classifyOrganization() is a
+    // strict partition and People already excludes investor contacts).
+    const [peopleCount, orgCounts] = await Promise.all([
+      fetchPeopleCountFromPostgres(),
+      fetchOrgSegmentCountsFromPostgres(),
+    ]);
+    if (peopleCount !== null && orgCounts) {
+      tabCounts = {
+        people: peopleCount,
+        vc: orgCounts.vc,
+        prospects: orgCounts.prospects,
+        "other-orgs": orgCounts["other-orgs"],
+        all: peopleCount + orgCounts.vc + orgCounts.prospects + orgCounts["other-orgs"],
+      };
+    }
 
-          if (segment === "vc") {
-            raw = raw.filter((e) => classifyOrg(e.tags) === "vc");
-          } else if (segment === "prospects") {
-            raw = raw.filter((e) => classifyOrg(e.tags) === "prospects");
-          } else if (segment === "other-orgs") {
-            raw = raw.filter((e) => classifyOrg(e.tags) === "other-orgs");
-          }
-
-          contacts = raw;
-          // No cursor-based pagination for full-scan segments
-          hasNextPage = false;
-          endCursor = null;
-          hasPreviousPage = false;
-        } catch {
-          offline = true;
-        }
+    if (segment === "people") {
+      // People tab: paginated Contact query filtered on isInvestorContact —
+      // no more INVESTOR_PERSON_TAGS string matching. See
+      // src/lib/contacts-read.ts for the parity evidence backing this cutover.
+      const page = await fetchPeopleContactsFromPostgres(PAGE_SIZE, afterCursor);
+      if (!page) {
+        offline = true;
+      } else {
+        contacts = page.contacts;
+        hasNextPage = page.hasNextPage;
+        endCursor = page.endCursor;
+        hasPreviousPage = !!afterCursor;
+      }
+    } else {
+      // Org sub-segments (vc, prospects, other-orgs): classified via
+      // Organization.isVcFirm/isProspect/isArchived instead of a full
+      // Kissinger org scan + client-side classifyOrg() tag matching. See
+      // src/lib/contacts-read.ts for the segmentation precedence rule and
+      // the parity check (exact match against Kissinger: vc=189,
+      // prospects=38, other-orgs=5619 as of 2026-07-22) that justified this
+      // cutover.
+      const orgs = await fetchOrgSegmentFromPostgres(segment);
+      if (!orgs) {
+        offline = true;
+      } else {
+        contacts = orgs;
+        // No cursor-based pagination for full-scan segments (matches prior behavior).
+        hasNextPage = false;
+        endCursor = null;
+        hasPreviousPage = false;
       }
     }
   }

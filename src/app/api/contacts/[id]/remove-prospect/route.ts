@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
+import { dualWriteRemoveProspectTag } from "@/lib/contacts-dual-write";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -97,6 +98,10 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
     console.error("[remove-prospect] Failed to update entity tags:", msg);
     return NextResponse.json({ error: "Failed to remove contact" }, { status: 500 });
   }
+
+  // Dual-write to Postgres (Prisma Phase 3.3, GH #44) — never blocks or
+  // fails this request; Kissinger above is the operation of record.
+  await dualWriteRemoveProspectTag({ kissingerId: id });
 
   revalidateTag("contacts");
 

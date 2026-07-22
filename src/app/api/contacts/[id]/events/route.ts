@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { dualWriteCreateContactEvent } from "@/lib/contacts-dual-write";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -152,16 +153,20 @@ export async function POST(
   }
 
   const eventType = KIND_TO_EVENT_TYPE[kind] ?? "NOTE";
+  const decodedId = decodeURIComponent(id);
 
   try {
     const data = (await gqlRequest(CREATE_CONTACT_EVENT_MUTATION, {
       input: {
-        entityId: decodeURIComponent(id),
+        entityId: decodedId,
         eventType,
         summary: notes,
         occurredAt,
       },
     })) as { createContactEvent: Record<string, unknown> };
+    // Dual-write to Postgres (Prisma Phase 3.3, GH #44) — never blocks or
+    // fails this request; Kissinger above is the operation of record.
+    await dualWriteCreateContactEvent({ kissingerId: decodedId, kind, notes, occurredAt });
     // Normalise response to the frontend ContactEvent shape
     const raw = data.createContactEvent;
     const event = {
