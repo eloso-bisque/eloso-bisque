@@ -105,6 +105,35 @@ export function defaultAssigneeForSectorSlug(slug: string): TeamMemberName | nul
 }
 
 // ---------------------------------------------------------------------------
+// ICP score display helpers (pure, unit-tested directly, no I/O)
+// ---------------------------------------------------------------------------
+
+// Postgres Organization.icpScore is stored 0-100 (see prisma/schema.prisma
+// comment on Organization.icpScore), matching the convention used
+// everywhere else icp_score is displayed in this app (e.g.
+// src/app/(main)/contacts/[id]/page.tsx ICPScoreSection: >=70 green, >=40
+// yellow). The Kissinger-backed version of the Sectors page assumed a 0-1
+// fraction (score > 0.7 / >= 0.4, times-100 for the label) — but Kissinger's
+// own sectorAggregates.avgIcpScore was always null in production (confirmed
+// via scripts/_probe3.ts), so that 0-1 assumption was never actually
+// exercised against real data. Fixed here to the 0-100 convention the rest
+// of the app uses, now that avgIcpScore is a real, populated value. These
+// are exported (and live here, not in the page component) so a future
+// refactor of the display thresholds can't silently reintroduce the
+// 0-1-vs-0-100 scale bug without a test catching it.
+export function icpColor(score: number | null): string {
+  if (score === null) return "bg-gray-100 text-gray-500";
+  if (score >= 70) return "bg-green-100 text-green-800";
+  if (score >= 40) return "bg-yellow-100 text-yellow-800";
+  return "bg-red-100 text-red-800";
+}
+
+export function icpLabel(score: number | null): string {
+  if (score === null) return "—";
+  return Math.round(score) + "";
+}
+
+// ---------------------------------------------------------------------------
 // Pure aggregation (unit-tested directly, no I/O)
 // ---------------------------------------------------------------------------
 
@@ -191,7 +220,14 @@ export async function fetchSectorHeatmapFromPostgres(): Promise<SectorHeatmapTil
         orderBy: { slug: "asc" },
       }),
       prisma.organizationSector.findMany({
-        where: { isPrimary: true },
+        // organization.isArchived: false matches the filter
+        // fetchOrgsForSectorFromPostgres already applies (and the
+        // whereForOrgSegment pattern in contacts-read.ts) — without it, an
+        // org archived out of a sector stays counted in this tile's
+        // orgCount/avgIcpScore/apolloMarketSize while silently disappearing
+        // from the /sectors/[sector] detail list, making the tile disagree
+        // with its own detail page.
+        where: { isPrimary: true, organization: { isArchived: false } },
         select: {
           sectorSlug: true,
           organization: {

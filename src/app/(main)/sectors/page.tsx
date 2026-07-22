@@ -1,5 +1,10 @@
 import Link from "next/link";
-import { fetchSectorHeatmapFromPostgres, type SectorHeatmapTile } from "@/lib/sectors-read";
+import {
+  fetchSectorHeatmapFromPostgres,
+  icpColor,
+  icpLabel,
+  type SectorHeatmapTile,
+} from "@/lib/sectors-read";
 
 export const metadata = {
   title: "Sectors — Eloso Bisque",
@@ -17,28 +22,12 @@ export const dynamic = "force-dynamic";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-// Postgres Organization.icpScore is stored 0-100 (see prisma/schema.prisma
-// comment on Organization.icpScore), matching the convention used
-// everywhere else icp_score is displayed in this app (e.g.
-// src/app/(main)/contacts/[id]/page.tsx ICPScoreSection: >=70 green, >=40
-// yellow). The Kissinger-backed version of this page assumed a 0-1
-// fraction (score > 0.7 / >= 0.4, times-100 for the label) — but Kissinger's
-// own sectorAggregates.avgIcpScore was always null in production (confirmed
-// via scripts/_probe3.ts), so that 0-1 assumption was never actually
-// exercised against real data. Fixed here to the 0-100 convention the rest
-// of the app uses, now that avgIcpScore is a real, populated value.
-function icpColor(score: number | null): string {
-  if (score === null) return "bg-gray-100 text-gray-500";
-  if (score >= 70) return "bg-green-100 text-green-800";
-  if (score >= 40) return "bg-yellow-100 text-yellow-800";
-  return "bg-red-100 text-red-800";
-}
-
-function icpLabel(score: number | null): string {
-  if (score === null) return "—";
-  return Math.round(score) + "";
-}
+//
+// icpColor/icpLabel now live in @/lib/sectors-read as exported, unit-tested
+// pure functions (see src/lib/__tests__/sectors-read.test.ts) rather than as
+// private helpers here — this is the fix for the 0-1-vs-0-100 ICP scale bug
+// this PR calls out, and it needs regression protection, not just a code
+// change.
 
 function coveragePercent(sector: SectorHeatmapTile): number {
   if (sector.orgCount === 0) return 0;
