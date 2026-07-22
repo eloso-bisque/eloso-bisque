@@ -27,6 +27,23 @@
  *   - RelationshipFrom (the works_at edges that would populate
  *     organizationId) has only 15 rows total across all 500 Contacts.
  *
+ * Note on the 411 vs. 990 discrepancy (flagged in independent PR review):
+ * the PR description's "Read-path cutover" section cites 990 active
+ * OutreachQueueEntry rows from a later run of the same
+ * `scripts/verify-outreach-parity.ts` query (`isActive: true` count) on the
+ * same day. Both figures are real, from the same query, at two different
+ * points in time — not a mislabeling. Querying prod directly (grouping
+ * active rows by `assignedAt` hour) shows exactly why: 411 rows were
+ * assigned in the 10:00 UTC hour and a further 579 in the 11:00 UTC hour
+ * (411 + 579 = 990) — this comment was written while a backfill/assignment
+ * process was still populating OutreachQueueEntry rows mid-run, and the PR
+ * body's figure was captured after it had progressed further. It does not
+ * change the "defer read-path cutover" conclusion — company/title
+ * completeness is a per-row property, and the completeness *fraction*
+ * (411-row snapshot: 2% org / 38% title; 990-row snapshot: 25.2% org /
+ * 62.3% title) stayed well below the 90% `COMPLETENESS_THRESHOLD` at both
+ * points in time.
+ *
  * Company and title are prominently rendered on every card in the Active and
  * Sent tabs (src/components/OutreachTaskCard.tsx, SentContactsList.tsx).
  * Cutting the read path over today would silently blank these fields for
