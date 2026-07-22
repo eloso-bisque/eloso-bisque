@@ -25,6 +25,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { type ProspectContact, type TeamMember } from "@/lib/outreach";
 import { mergeEntityMeta } from "@/lib/kissinger";
 import { generateOpusMessage } from "@/lib/outreach-generate";
+import { dualWriteGeneratedMessage, angleForAssignee } from "@/lib/outreach-dual-write";
 
 /** Persist the generated message to Kissinger as meta fields. Non-blocking. */
 async function persistMessageToKissinger(
@@ -36,6 +37,26 @@ async function persistMessageToKissinger(
     outreach_message: message,
     outreach_message_generated_at: new Date().toISOString(),
     outreach_message_sender: sender.toLowerCase(),
+  });
+}
+
+/**
+ * Dual-write (Prisma Phase 3.2): version a GeneratedMessage row in Postgres
+ * alongside the Kissinger meta write above. Never throws.
+ */
+async function persistMessageToPostgres(
+  entityId: string,
+  message: string,
+  sender: TeamMember,
+  source: "claude" | "template"
+): Promise<void> {
+  const angle = angleForAssignee(sender);
+  if (!angle) return;
+  await dualWriteGeneratedMessage({
+    kissingerContactId: entityId,
+    angle,
+    messageBody: message,
+    generationMethod: source === "claude" ? "ai" : "template",
   });
 }
 
@@ -70,6 +91,9 @@ export async function POST(request: NextRequest) {
   if (entityId) {
     persistMessageToKissinger(entityId, result.message, assignee).catch((err) => {
       console.error("[outreach/generate-message] Kissinger write failed:", err);
+    });
+    persistMessageToPostgres(entityId, result.message, assignee, result.source).catch((err) => {
+      console.warn("[outreach/generate-message] Postgres dual-write failed:", err);
     });
   }
 

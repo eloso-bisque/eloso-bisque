@@ -460,10 +460,23 @@ model OutreachQueueEntry {
   organization Organization? @relation(fields: [organizationId], references: [id])
   touches      OutreachTouch[]
 
-  // At most one active entry per contact
-  @@unique([contactId, isActive], name: "unique_active_assignment")
+  // Invariant: at most one *active* entry per contact. A plain @@unique on
+  // (contactId, isActive) is NOT the right way to express this: isActive is
+  // NOT NULL, so a full unique index also caps *inactive* rows at one per
+  // contact, which is wrong — inactive rows are history (skipped, sent,
+  // responded, reassigned) and a contact can legitimately accumulate many
+  // of them across its lifetime. Prisma's schema DSL has no partial/WHERE-
+  // scoped unique index, so the real constraint —
+  //   CREATE UNIQUE INDEX ... ON "OutreachQueueEntry"("contactId") WHERE "isActive" = true
+  // — is hand-authored directly in
+  // prisma/migrations/20260722_partial_unique_active_assignment/migration.sql,
+  // which is the source of truth for this invariant. Do not re-add a plain
+  // @@unique([contactId, isActive]) here — `prisma migrate dev` cannot
+  // express the partial index and will try to "fix" the schema back to the
+  // broken full-uniqueness version if asked to reconcile drift.
   @@index([userId, isActive, currentStage])
   @@index([userId, isActive])
+  @@index([contactId, isActive])
   @@index([contactId])
 }
 

@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { recordOutreachResponse, type ResponseType } from "@/lib/kissinger";
+import { verifyToken, COOKIE_NAME as SESSION_COOKIE_NAME } from "@/lib/auth";
+import { dualWriteOutreachResponse } from "@/lib/outreach-dual-write";
+
+/** Map from login email to lowercase team member name (mirrors new-batch/route.ts). */
+const EMAIL_TO_ASSIGNEE: Record<string, string> = {
+  "drew@eloso.ai": "drew",
+  "ben@eloso.ai": "ben",
+  "jake@eloso.ai": "jake",
+};
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -135,6 +144,25 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Non-critical — log but don't fail the response recording
     const tagMsg = tagErr instanceof Error ? tagErr.message : String(tagErr);
     console.warn("[outreach-response] promoteToSent failed (non-fatal):", tagMsg);
+  }
+
+  // Dual-write to Postgres OutreachResponse + Contact/OutreachQueueEntry
+  // (Prisma Phase 3.2). Never throws — recordOutreachResponse above (Kissinger)
+  // is the write of record. userId is attributed from the session cookie when
+  // present; null (system-logged) otherwise — this route is also callable via
+  // the internal-secret path with no user session.
+  try {
+    const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+    const session = token ? await verifyToken(token) : null;
+    const assigneeLower = session?.email ? EMAIL_TO_ASSIGNEE[session.email.toLowerCase()] ?? null : null;
+    await dualWriteOutreachResponse({
+      kissingerContactId: id,
+      responseType: responseType as ResponseType,
+      notes: typeof notes === "string" ? notes : undefined,
+      assigneeLower,
+    });
+  } catch (dualWriteErr) {
+    console.warn("[outreach-response] Dual-write failed (non-fatal):", dualWriteErr);
   }
 
   revalidateTag("contacts");
