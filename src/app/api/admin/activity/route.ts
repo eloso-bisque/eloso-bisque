@@ -1,64 +1,37 @@
 import { NextResponse } from "next/server";
-import { kv } from "@vercel/kv";
+import {
+  ACTIVITY_DASHBOARD_DAYS,
+  buildActivityDashboardResponse,
+  fetchActivityDashboardData,
+  getDates,
+  resolveDashboardUsers,
+} from "@/lib/activity-dashboard";
 
-const USERS = [
-  { email: "drew@eloso.ai", name: "Drew" },
-  { email: "ben@eloso.ai", name: "Ben" },
-  { email: "jake@eloso.ai", name: "Jake" },
-];
-
-const DAYS = 7;
-
-function getDates(count: number): string[] {
-  const dates: string[] = [];
-  for (let i = count - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    dates.push(d.toISOString().split("T")[0]);
-  }
-  return dates;
-}
-
+// Prisma Phase 3.1 cutover: this route used to read Vercel KV counters
+// directly (`activity:logins:*`, `activity:outreach_sent:*`). It now reads
+// from Postgres `ActivityLog` rows instead (docs/prisma-schema-design.md
+// section 3.7). The KV writes themselves are untouched and continue as a
+// rollback safety net — see src/lib/activity-log.ts.
 export async function GET() {
-  const dates = getDates(DAYS);
+  const dates = getDates(ACTIVITY_DASHBOARD_DAYS);
+  const dashboardUsers = await resolveDashboardUsers();
+  const userIds = dashboardUsers
+    .map((u) => u.userId)
+    .filter((id): id is string => id !== null);
 
-  const users = await Promise.all(
-    USERS.map(async ({ email, name }) => {
-      // Fetch last login timestamp
-      const lastLogin = await kv.get<string>(`activity:last_login:${email}`);
-
-      // Fetch all-time total outreach sent
-      const totalOutreachSent =
-        (await kv.get<number>(`activity:outreach_sent_total:${email}`)) ?? 0;
-
-      // Fetch per-day counts in parallel
-      const [dailyLogins, dailyOutreachSent] = await Promise.all([
-        Promise.all(
-          dates.map((date) =>
-            kv
-              .get<number>(`activity:logins:${email}:${date}`)
-              .then((v) => v ?? 0)
-          )
-        ),
-        Promise.all(
-          dates.map((date) =>
-            kv
-              .get<number>(`activity:outreach_sent:${email}:${date}`)
-              .then((v) => v ?? 0)
-          )
-        ),
-      ]);
-
-      return {
-        email,
-        name,
-        last_login: lastLogin ?? null,
-        last_7_days_logins: dailyLogins,
-        last_7_days_outreach_sent: dailyOutreachSent,
-        total_outreach_sent: totalOutreachSent,
-      };
-    })
+  const windowStartUtc = new Date(`${dates[0]}T00:00:00.000Z`);
+  const { daily, lastLogin, totalOutreach } = await fetchActivityDashboardData(
+    userIds,
+    windowStartUtc
   );
 
-  return NextResponse.json({ users, dates });
+  const body = buildActivityDashboardResponse(
+    dashboardUsers,
+    dates,
+    daily,
+    lastLogin,
+    totalOutreach
+  );
+
+  return NextResponse.json(body);
 }

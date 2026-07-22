@@ -3,6 +3,7 @@ import { kv } from "@vercel/kv";
 import { revalidateTag } from "next/cache";
 import { verifyToken, COOKIE_NAME } from "@/lib/auth";
 import { recordOutreachTouch } from "@/lib/kissinger";
+import { logActivityEvent } from "@/lib/activity-log";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -140,6 +141,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         await kv.incr(sentKey);
         await kv.expire(sentKey, 90 * 24 * 3600);
         await kv.incr(`activity:outreach_sent_total:${session.email}`);
+
+        // Dual-write to Postgres ActivityLog (Prisma Phase 3.1 migration).
+        // logActivityEvent never throws — KV remains the source of truth
+        // until the Activity Dashboard cutover has been stable for a while.
+        await logActivityEvent({
+          email: session.email,
+          eventType: "OutreachTouchSent",
+          contactId: id,
+        });
       }
     }
   } catch (trackErr) {
