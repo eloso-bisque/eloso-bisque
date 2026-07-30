@@ -243,6 +243,14 @@ model Contact {
   kissingerId String? @unique
 
   // Identity
+  /// No @unique constraint: a 2026-07-30 audit found 125 pre-existing
+  /// duplicate-email groups (250 rows) already in prod data (a past import
+  /// bug, not a hypothetical), which would block a unique index from
+  /// migrating. Duplicate prevention for NEW contacts is enforced at the
+  /// application layer instead — see findDuplicateContactByEmail in
+  /// src/lib/contacts-dual-write.ts, wired into both create routes. The
+  /// existing dirty data is tracked as a separate cleanup (bd issue), not
+  /// silently auto-merged.
   email               String?
   linkedinUrl         String?
   /// Date the team member connected with this person on LinkedIn (ISO date string)

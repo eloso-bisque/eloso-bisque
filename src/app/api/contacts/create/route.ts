@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { dualWriteCreateEntity, withOrganizationNote } from "@/lib/contacts-dual-write";
+import { dualWriteCreateEntity, withOrganizationNote, findDuplicateContactByEmail } from "@/lib/contacts-dual-write";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,6 +123,23 @@ export async function POST(request: NextRequest) {
 
     // Step 2: Determine name (kept required — same validation Kissinger used to enforce)
     const name = enriched.name || enriched.organization || enriched.email || "Unknown";
+
+    // Step 2.5: Reject an exact-email duplicate before writing. Person
+    // contacts only — Organization has no email column. See
+    // findDuplicateContactByEmail's doc in contacts-dual-write.ts for why
+    // this is an app-level check rather than a DB unique constraint.
+    if (kind === "person") {
+      const existing = await findDuplicateContactByEmail(enriched.email);
+      if (existing) {
+        return NextResponse.json(
+          {
+            error: `A contact with this email already exists: ${existing.name}`,
+            existingContactId: existing.id,
+          },
+          { status: 409 }
+        );
+      }
+    }
 
     // Step 3: Save to Postgres — the sole write since the Kissinger dual-write
     // cutover (Kissinger is no longer in the live create path; see

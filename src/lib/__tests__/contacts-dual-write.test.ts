@@ -27,6 +27,7 @@ const organizationCreateMock = vi.fn();
 const contactUpdateManyMock = vi.fn();
 const organizationUpdateManyMock = vi.fn();
 const contactFindUniqueMock = vi.fn();
+const contactFindFirstMock = vi.fn();
 const contactUpdateMock = vi.fn();
 const contactTagDeleteManyMock = vi.fn();
 const contactEventCreateMock = vi.fn();
@@ -38,6 +39,7 @@ vi.mock("@/lib/prisma", () => ({
       create: (...args: unknown[]) => contactCreateMock(...args),
       updateMany: (...args: unknown[]) => contactUpdateManyMock(...args),
       findUnique: (...args: unknown[]) => contactFindUniqueMock(...args),
+      findFirst: (...args: unknown[]) => contactFindFirstMock(...args),
       update: (...args: unknown[]) => contactUpdateMock(...args),
     },
     organization: {
@@ -62,6 +64,8 @@ import {
   toContactEventKind,
   withOrganizationNote,
   PROSPECT_CONTACT_TAG,
+  normalizeEmailForDedup,
+  findDuplicateContactByEmail,
 } from "../contacts-dual-write";
 
 beforeEach(() => {
@@ -261,5 +265,41 @@ describe("dualWriteCreateContactEvent", () => {
         occurredAt: "2026-07-20T00:00:00.000Z",
       })
     ).rejects.toThrow("db down");
+  });
+});
+
+describe("normalizeEmailForDedup", () => {
+  it("trims and lowercases", () => {
+    expect(normalizeEmailForDedup("  Bruce@Zoox.com  ")).toBe("bruce@zoox.com");
+  });
+
+  it("returns null for empty, whitespace-only, or missing input", () => {
+    expect(normalizeEmailForDedup("")).toBeNull();
+    expect(normalizeEmailForDedup("   ")).toBeNull();
+    expect(normalizeEmailForDedup(undefined)).toBeNull();
+    expect(normalizeEmailForDedup(null)).toBeNull();
+  });
+});
+
+describe("findDuplicateContactByEmail", () => {
+  it("returns null without querying Postgres when email is empty/missing", async () => {
+    expect(await findDuplicateContactByEmail(undefined)).toBeNull();
+    expect(await findDuplicateContactByEmail("")).toBeNull();
+    expect(contactFindFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("queries case-insensitively and returns the existing contact on a hit", async () => {
+    contactFindFirstMock.mockResolvedValue({ id: "c-existing", name: "Bruce Baumgartner" });
+    const result = await findDuplicateContactByEmail("Bruce@Zoox.com");
+    expect(result).toEqual({ id: "c-existing", name: "Bruce Baumgartner" });
+    expect(contactFindFirstMock).toHaveBeenCalledWith({
+      where: { email: { equals: "bruce@zoox.com", mode: "insensitive" } },
+      select: { id: true, name: true },
+    });
+  });
+
+  it("returns null when no match", async () => {
+    contactFindFirstMock.mockResolvedValue(null);
+    expect(await findDuplicateContactByEmail("nobody@example.com")).toBeNull();
   });
 });

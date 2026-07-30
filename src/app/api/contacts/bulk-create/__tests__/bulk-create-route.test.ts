@@ -16,12 +16,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const contactCreateMock = vi.fn();
+const contactFindFirstMock = vi.fn();
 const organizationCreateMock = vi.fn();
 const revalidateTagMock = vi.fn();
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
-    contact: { create: (...args: unknown[]) => contactCreateMock(...args) },
+    contact: {
+      create: (...args: unknown[]) => contactCreateMock(...args),
+      findFirst: (...args: unknown[]) => contactFindFirstMock(...args),
+    },
     organization: { create: (...args: unknown[]) => organizationCreateMock(...args) },
   },
 }));
@@ -48,6 +52,7 @@ describe("POST /api/contacts/bulk-create", () => {
     fetchSpy = vi.fn().mockRejectedValue(new Error("network calls are not allowed in this test"));
     global.fetch = fetchSpy as unknown as typeof global.fetch;
     contactCreateMock.mockResolvedValue({ id: "pg-1" });
+    contactFindFirstMock.mockResolvedValue(null); // no duplicate by default
     revalidateTagMock.mockReset();
   });
 
@@ -117,5 +122,53 @@ describe("POST /api/contacts/bulk-create", () => {
     expect(res.status).toBe(200);
     expect(json.created).toBe(2);
     expect(json.errors).toHaveLength(0);
+  });
+
+  it("skips a row whose email already exists in Postgres, tracked as an error not a crash", async () => {
+    contactFindFirstMock.mockResolvedValueOnce({ id: "c-existing", name: "Alice Existing" });
+
+    const res = await POST(
+      makeRequest({
+        contacts: [
+          { name: "Alice", email: "alice@example.com" },
+          { name: "Bob", email: "bob@example.com" },
+        ],
+      }) as unknown as Parameters<typeof POST>[0]
+    );
+    const json = (await res.json()) as BulkCreateResult;
+
+    expect(json.created).toBe(1);
+    expect(contactCreateMock).toHaveBeenCalledTimes(1);
+    expect(json.errors).toHaveLength(1);
+    expect(json.errors[0].name).toBe("Alice");
+    expect(json.errors[0].reason).toMatch(/already exists/i);
+  });
+
+  it("catches two rows in the same batch sharing an email, without a Postgres round trip for the second", async () => {
+    const res = await POST(
+      makeRequest({
+        contacts: [
+          { name: "Alice", email: "dupe@example.com" },
+          { name: "Alice Duplicate", email: "dupe@example.com" },
+        ],
+      }) as unknown as Parameters<typeof POST>[0]
+    );
+    const json = (await res.json()) as BulkCreateResult;
+
+    expect(json.created).toBe(1);
+    expect(contactCreateMock).toHaveBeenCalledTimes(1);
+    expect(json.errors).toHaveLength(1);
+    expect(json.errors[0].name).toBe("Alice Duplicate");
+    expect(json.errors[0].reason).toMatch(/duplicate email within this batch/i);
+  });
+
+  it("does not run the duplicate check for rows with no email", async () => {
+    const res = await POST(
+      makeRequest({ contacts: [{ name: "Alice" }] }) as unknown as Parameters<typeof POST>[0]
+    );
+    const json = (await res.json()) as BulkCreateResult;
+
+    expect(json.created).toBe(1);
+    expect(contactFindFirstMock).not.toHaveBeenCalled();
   });
 });

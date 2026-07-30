@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { randomUUID } from "node:crypto";
 import { parseCsv, type ParsedContact } from "@/lib/csv-parse";
-import { dualWriteCreateEntity, withOrganizationNote } from "@/lib/contacts-dual-write";
+import {
+  dualWriteCreateEntity,
+  withOrganizationNote,
+  findDuplicateContactByEmail,
+  normalizeEmailForDedup,
+} from "@/lib/contacts-dual-write";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,6 +73,11 @@ export async function POST(request: NextRequest) {
   const creationErrors: { name: string; reason: string }[] = [];
   let created = 0;
   let skipped = 0;
+  // Tracks emails already created within THIS batch, so two duplicate rows
+  // in the same CSV/array are caught even though neither exists in Postgres
+  // yet when the batch starts (findDuplicateContactByEmail alone would miss
+  // that case since it only sees already-committed rows).
+  const emailsSeenThisBatch = new Set<string>();
 
   for (const contact of contacts) {
     // Derive name — same requirement Kissinger used to enforce
@@ -75,6 +85,25 @@ export async function POST(request: NextRequest) {
     if (!name) {
       skipped++;
       continue;
+    }
+
+    // Duplicate check (person only — Organization has no email column). See
+    // findDuplicateContactByEmail's doc in contacts-dual-write.ts for why
+    // this is an app-level check rather than a DB unique constraint.
+    if (kind === "person") {
+      const normalizedEmail = normalizeEmailForDedup(contact.email);
+      if (normalizedEmail) {
+        if (emailsSeenThisBatch.has(normalizedEmail)) {
+          creationErrors.push({ name, reason: `Duplicate email within this batch: ${contact.email}` });
+          continue;
+        }
+        const existing = await findDuplicateContactByEmail(contact.email);
+        if (existing) {
+          creationErrors.push({ name, reason: `A contact with this email already exists: ${existing.name}` });
+          continue;
+        }
+        emailsSeenThisBatch.add(normalizedEmail);
+      }
     }
 
     try {

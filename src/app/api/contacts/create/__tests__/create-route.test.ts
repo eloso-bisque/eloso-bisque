@@ -25,12 +25,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const contactCreateMock = vi.fn();
+const contactFindFirstMock = vi.fn();
 const organizationCreateMock = vi.fn();
 const revalidateTagMock = vi.fn();
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
-    contact: { create: (...args: unknown[]) => contactCreateMock(...args) },
+    contact: {
+      create: (...args: unknown[]) => contactCreateMock(...args),
+      findFirst: (...args: unknown[]) => contactFindFirstMock(...args),
+    },
     organization: { create: (...args: unknown[]) => organizationCreateMock(...args) },
   },
 }));
@@ -57,6 +61,7 @@ describe("POST /api/contacts/create", () => {
     fetchSpy = vi.fn().mockRejectedValue(new Error("network calls are not allowed in this test"));
     global.fetch = fetchSpy as unknown as typeof global.fetch;
     contactCreateMock.mockResolvedValue({ id: "pg-1" });
+    contactFindFirstMock.mockResolvedValue(null); // no duplicate by default
     revalidateTagMock.mockReset();
   });
 
@@ -133,5 +138,31 @@ describe("POST /api/contacts/create", () => {
     expect(json.ok).toBe(true);
     expect(json.entity.name).toBe("Erle Shepard");
     expect(contactCreateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a duplicate email with 409 instead of creating a second contact", async () => {
+    contactFindFirstMock.mockResolvedValue({ id: "c-existing", name: "Erle Shepard (existing)" });
+
+    const res = await POST(
+      makeRequest({ name: "Erle Shepard", email: "erle@x.com", kind: "person" }) as unknown as Parameters<
+        typeof POST
+      >[0]
+    );
+    const json = (await res.json()) as { error: string; existingContactId: string };
+
+    expect(res.status).toBe(409);
+    expect(json.error).toMatch(/already exists/i);
+    expect(json.existingContactId).toBe("c-existing");
+    expect(contactCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run the duplicate check for org entities (no email column)", async () => {
+    const res = await POST(
+      makeRequest({ name: "Acme Corp", kind: "org" }) as unknown as Parameters<typeof POST>[0]
+    );
+
+    expect(res.status).toBe(200);
+    expect(contactFindFirstMock).not.toHaveBeenCalled();
+    expect(organizationCreateMock).toHaveBeenCalledTimes(1);
   });
 });
