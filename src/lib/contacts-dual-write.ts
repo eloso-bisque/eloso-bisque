@@ -90,6 +90,50 @@ export async function dualWriteCreateEntity(params: DualWriteCreateEntityParams)
 }
 
 // ---------------------------------------------------------------------------
+// Duplicate-contact detection (create-time safeguard)
+// ---------------------------------------------------------------------------
+//
+// Contact.email has no @unique constraint in prisma/schema.prisma. That's a
+// deliberate, verified decision, not an oversight: a 2026-07-30 audit found
+// 125 pre-existing duplicate-email groups (250 rows) already in production
+// data (e.g. two "Ashley Carter" / acarter@sig.org rows, both imported from
+// the same SIG Webinar enrichment batch seconds apart) — a real bug in a
+// past import, not a hypothetical. Adding a hard unique index today would
+// fail to migrate against that existing data, and silently merging/deleting
+// old rows without human review risks losing outreach history attached to
+// one of the two duplicates. See bd issue for the cleanup: the existing
+// dirty data is tracked separately from this create-time guard.
+//
+// This function is the forward-looking half of the fix: prevent *new*
+// duplicates going forward by checking before create. Matching is
+// case-insensitive and trims whitespace; empty/missing emails never match
+// (many real contacts legitimately have no email — that's not a duplicate
+// signal).
+
+/** Pure: normalizes an email for duplicate comparison (trim + lowercase). Returns null for empty/missing. */
+export function normalizeEmailForDedup(email: string | undefined | null): string | null {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Looks up an existing Contact by case-insensitive email match. Returns
+ * `{ id, name }` if found, `null` if no email was given or none matches.
+ * Read-only — callers decide what to do with a hit (reject, warn, etc.).
+ */
+export async function findDuplicateContactByEmail(
+  email: string | undefined | null
+): Promise<{ id: string; name: string } | null> {
+  const normalized = normalizeEmailForDedup(email);
+  if (!normalized) return null;
+
+  return prisma.contact.findFirst({
+    where: { email: { equals: normalized, mode: "insensitive" } },
+    select: { id: true, name: true },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Free-text "organization" field on the create form
 // ---------------------------------------------------------------------------
 //
