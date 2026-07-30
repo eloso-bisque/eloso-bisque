@@ -138,6 +138,71 @@ export function resolveContactOrganization(
 }
 
 // ---------------------------------------------------------------------------
+// Auto-created ("synthetic") Organizations for unmatched company/org meta
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic Organization.kissingerId for a freeform company/org name
+ * that has no corresponding Kissinger Organization entity. Not a real
+ * Kissinger entity id (real ones are opaque ids from the graph) — the
+ * `synthetic-org:` prefix makes that unambiguous, and keying on the
+ * lowercased/trimmed name makes the id stable across backfill re-runs and
+ * shared by every contact whose company/org meta names the same employer.
+ */
+export function syntheticOrgKissingerId(name: string): string {
+  return `synthetic-org:${name.trim().toLowerCase()}`;
+}
+
+export interface SyntheticOrgCandidate {
+  kissingerId: string;
+  name: string;
+}
+
+/**
+ * Identifies freeform company/org meta names that need an auto-created
+ * ("synthetic") Organization: contacts with no `works_at` edge whose
+ * `metaCompanyName` doesn't case-insensitively match any Organization name
+ * already known (real Kissinger orgs, or synthetic orgs from an earlier
+ * call in the same run — callers should fold the returned candidates into
+ * `orgKissingerIdByLowerName` before resolving remaining contacts, see
+ * scripts/backfill-kissinger.ts's buildPlans()).
+ *
+ * Without this, resolveContactOrganization() leaves `organizationId` null
+ * for any contact whose company/org text doesn't match an existing
+ * Organization by name — real prod data shows this is the overwhelming
+ * majority case (most contacts have company/org meta but no works_at edge
+ * and no matching Organization row), which is why org-resolution
+ * completeness was far below what the company/org meta signal alone could
+ * support.
+ *
+ * Deduplicated by lowercased/trimmed name (first-seen casing wins) so
+ * multiple contacts sharing an employer converge on one synthetic
+ * Organization rather than one each.
+ */
+export function findSyntheticOrgCandidates(
+  contacts: readonly { kissingerId: string; metaCompanyName: string | null }[],
+  worksAtBySource: ReadonlyMap<string, readonly KissingerEdge[]>,
+  orgKissingerIdByLowerName: ReadonlyMap<string, string>
+): SyntheticOrgCandidate[] {
+  const nameByLower = new Map<string, string>();
+  for (const c of contacts) {
+    if (!c.metaCompanyName) continue;
+    if ((worksAtBySource.get(c.kissingerId) ?? []).length > 0) continue;
+
+    const trimmed = c.metaCompanyName.trim();
+    const lower = trimmed.toLowerCase();
+    if (!lower) continue;
+    if (orgKissingerIdByLowerName.has(lower)) continue;
+    if (!nameByLower.has(lower)) nameByLower.set(lower, trimmed);
+  }
+
+  return [...nameByLower.entries()].map(([, name]) => ({
+    kissingerId: syntheticOrgKissingerId(name),
+    name,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Queue tags -> OutreachQueueEntry
 // ---------------------------------------------------------------------------
 

@@ -4,6 +4,7 @@ import {
   buildContactPlan,
   buildSignalPlan,
   buildGeneratedMessagePlan,
+  buildSyntheticOrganizationPlan,
   metaToRecord,
 } from "../build-plan";
 import { SENDER_TO_ANGLE } from "../constants";
@@ -146,6 +147,61 @@ describe("buildContactPlan", () => {
     );
     expect(plan.outreachStage).toBe("cold");
     expect(plan.warnings.length).toBe(1);
+  });
+
+  // GH parity-retry: the backfill's title/metaCompanyName extraction used to
+  // only check the bare meta.title/meta.company/meta.org keys — missing the
+  // nested Apollo-enrichment JSON blob (meta key "meta") and the "headline"
+  // key that src/lib/kissinger.ts's LIVE read path already falls back to.
+  // These two contacts are shaped after real Apollo-re-enriched records.
+  it("resolves title from the nested Apollo-enrichment JSON blob when meta.title is absent", () => {
+    const plan = buildContactPlan(
+      entity({
+        kind: "person",
+        name: "Apollo-Enriched Contact",
+        meta: [{ key: "meta", value: JSON.stringify({ title: "VP Supply Chain", org: "Nested Org Co" }) }],
+      })
+    );
+    expect(plan.title).toBe("VP Supply Chain");
+    expect(plan.metaCompanyName).toBe("Nested Org Co");
+  });
+
+  it("resolves title from meta.headline when neither meta.title nor the nested blob has one", () => {
+    const plan = buildContactPlan(
+      entity({
+        kind: "person",
+        name: "LinkedIn Headline Contact",
+        meta: [{ key: "headline", value: "Head of Logistics" }],
+      })
+    );
+    expect(plan.title).toBe("Head of Logistics");
+  });
+
+  it("leaves title/metaCompanyName null when no signal exists anywhere in the fallback chain", () => {
+    const plan = buildContactPlan(
+      entity({
+        kind: "person",
+        name: "No Signal Contact",
+        meta: [{ key: "email", value: "noone@example.com" }],
+      })
+    );
+    expect(plan.title).toBeNull();
+    expect(plan.metaCompanyName).toBeNull();
+  });
+});
+
+describe("buildSyntheticOrganizationPlan", () => {
+  it("builds a neutral-default OrganizationPlan keyed on the given synthetic id and name", () => {
+    const plan = buildSyntheticOrganizationPlan("synthetic-org:acme logistics", "Acme Logistics");
+    expect(plan.kissingerId).toBe("synthetic-org:acme logistics");
+    expect(plan.name).toBe("Acme Logistics");
+    expect(plan.isProspect).toBe(true);
+    expect(plan.isVcFirm).toBe(false);
+    expect(plan.isArchived).toBe(false);
+    expect(plan.funnelStage).toBe("Identified");
+    expect(plan.investorPipeline).toBe("Research");
+    expect(plan.tags).toContain("auto-created");
+    expect(plan.warnings).toEqual([]);
   });
 });
 
