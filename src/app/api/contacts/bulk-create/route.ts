@@ -99,10 +99,17 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Invalidate contacts and funnel caches if any contacts were created
+  // Invalidate contacts and funnel caches if any contacts were created.
+  // Wrapped defensively: the Postgres writes above already succeeded, so a
+  // revalidation failure must never prevent the accurate created/skipped/
+  // errors summary below from reaching the caller.
   if (created > 0) {
-    revalidateTag("contacts");
-    revalidateTag("funnel");
+    try {
+      revalidateTag("contacts");
+      revalidateTag("funnel");
+    } catch (err) {
+      console.error("Contacts created, but cache revalidation failed (non-fatal):", err);
+    }
   }
 
   return NextResponse.json<BulkCreateResult>({

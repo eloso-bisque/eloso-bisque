@@ -41,8 +41,15 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     );
   }
 
-  revalidateTag("contacts");
-  revalidateTag("funnel");
+  // Outside the write's try/catch: the Postgres write already succeeded, so
+  // a revalidation failure must never turn a successful update into an
+  // error response for the caller.
+  try {
+    revalidateTag("contacts");
+    revalidateTag("funnel");
+  } catch (err) {
+    console.error("Stage updated, but cache revalidation failed (non-fatal):", err);
+  }
 
   return NextResponse.json({ id, stage });
 }

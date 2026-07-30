@@ -116,6 +116,7 @@ export async function POST(request: NextRequest) {
 
   const kind = body.kind ?? "person";
 
+  let created: { id: string; name: string };
   try {
     // Step 1: AI enrichment
     const enriched = await enrichWithClaude({ ...body, kind });
@@ -141,13 +142,7 @@ export async function POST(request: NextRequest) {
       linkedinUrl: enriched.linkedin_url,
       notes: withOrganizationNote(enriched.notes, enriched.organization),
     });
-    const created = { id, name };
-
-    // Invalidate contacts and funnel caches so the new contact appears immediately
-    revalidateTag("contacts");
-    revalidateTag("funnel");
-
-    return NextResponse.json({ ok: true, entity: created });
+    created = { id, name };
   } catch (err) {
     console.error("Failed to create contact:", err);
     return NextResponse.json(
@@ -155,4 +150,19 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+
+  // Invalidate contacts and funnel caches so the new contact appears
+  // immediately. Deliberately OUTSIDE the write's try/catch above: the
+  // Postgres write already succeeded at this point, so a revalidation
+  // failure must never be reported back as a failed create (that would be a
+  // false negative — the row exists, but the caller is told to retry,
+  // risking a duplicate). Best-effort; log and continue either way.
+  try {
+    revalidateTag("contacts");
+    revalidateTag("funnel");
+  } catch (err) {
+    console.error("Contact created, but cache revalidation failed (non-fatal):", err);
+  }
+
+  return NextResponse.json({ ok: true, entity: created });
 }

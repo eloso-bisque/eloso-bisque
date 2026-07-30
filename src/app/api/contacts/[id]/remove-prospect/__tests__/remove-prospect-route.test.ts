@@ -17,6 +17,7 @@ const contactFindUniqueMock = vi.fn();
 const contactUpdateMock = vi.fn();
 const contactTagDeleteManyMock = vi.fn();
 const transactionMock = vi.fn();
+const revalidateTagMock = vi.fn();
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
@@ -31,7 +32,7 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
-vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidateTag: (...args: unknown[]) => revalidateTagMock(...args) }));
 
 import { DELETE } from "../route";
 
@@ -48,6 +49,7 @@ describe("DELETE /api/contacts/[id]/remove-prospect", () => {
     fetchSpy = vi.fn().mockRejectedValue(new Error("network calls are not allowed in this test"));
     global.fetch = fetchSpy as unknown as typeof global.fetch;
     transactionMock.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+    revalidateTagMock.mockReset();
   });
 
   afterEach(() => {
@@ -89,5 +91,21 @@ describe("DELETE /api/contacts/[id]/remove-prospect", () => {
 
     expect(res.status).toBe(404);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("still reports success when the Postgres write succeeds but cache revalidation throws", async () => {
+    contactFindUniqueMock.mockResolvedValue({
+      id: "pg-1",
+      tags: [{ tag: "prospect-contact" }],
+    });
+    revalidateTagMock.mockImplementation(() => {
+      throw new Error("Invariant: static generation store missing in revalidateTag");
+    });
+
+    const res = await DELETE({} as unknown as Parameters<typeof DELETE>[0], ctx("kis-1"));
+    const json = (await res.json()) as { success: boolean };
+
+    expect(res.status).toBe(200);
+    expect(json.success).toBe(true);
   });
 });
