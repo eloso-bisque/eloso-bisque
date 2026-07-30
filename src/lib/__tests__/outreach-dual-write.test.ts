@@ -37,6 +37,7 @@ const touchCreateMock = vi.fn();
 const responseCreateMock = vi.fn();
 const generatedMessageUpdateManyMock = vi.fn();
 const generatedMessageCreateMock = vi.fn();
+const outreachFeedbackCreateMock = vi.fn();
 
 /** A fake `$transaction` that just invokes the callback with the same mocked client. */
 function makeTxClient() {
@@ -82,6 +83,9 @@ vi.mock("@/lib/prisma", () => ({
       updateMany: (...args: unknown[]) => generatedMessageUpdateManyMock(...args),
       create: (...args: unknown[]) => generatedMessageCreateMock(...args),
     },
+    outreachFeedback: {
+      create: (...args: unknown[]) => outreachFeedbackCreateMock(...args),
+    },
     $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(makeTxClient())),
   },
 }));
@@ -94,6 +98,7 @@ import {
   dualWriteMarkSent,
   dualWriteOutreachResponse,
   dualWriteGeneratedMessage,
+  dualWriteOutreachFeedback,
 } from "@/lib/outreach-dual-write";
 
 function resetAllMocks() {
@@ -109,6 +114,7 @@ function resetAllMocks() {
     responseCreateMock,
     generatedMessageUpdateManyMock,
     generatedMessageCreateMock,
+    outreachFeedbackCreateMock,
   ].forEach((m) => m.mockReset());
 }
 
@@ -403,6 +409,64 @@ describe("dualWriteOutreachResponse", () => {
       dualWriteOutreachResponse({ kissingerContactId: "kiss_unknown", responseType: "Interested", assigneeLower: null })
     ).resolves.toBeUndefined();
     expect(responseCreateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("dualWriteOutreachFeedback", () => {
+  beforeEach(() => {
+    resetAllMocks();
+    contactFindUniqueMock.mockResolvedValue({ id: "pg_kiss_1", organizationId: null, outreachStage: "touched_1" });
+    outreachFeedbackCreateMock.mockResolvedValue({ id: "fb_1" });
+  });
+
+  it("creates an OutreachFeedback row with the resolved Postgres contactId, thumb, text, and loggedBy", async () => {
+    await dualWriteOutreachFeedback({
+      kissingerContactId: "kiss_1",
+      thumb: "up",
+      text: "great fit",
+      assigneeLower: "ben",
+    });
+
+    expect(outreachFeedbackCreateMock).toHaveBeenCalledWith({
+      data: { contactId: "pg_kiss_1", thumb: "up", text: "great fit", loggedBy: "ben" },
+    });
+  });
+
+  it("stores text=null when no text is provided", async () => {
+    await dualWriteOutreachFeedback({ kissingerContactId: "kiss_1", thumb: "down", assigneeLower: "jake" });
+
+    expect(outreachFeedbackCreateMock).toHaveBeenCalledWith({
+      data: { contactId: "pg_kiss_1", thumb: "down", text: null, loggedBy: "jake" },
+    });
+  });
+
+  it("stores loggedBy=null when no assignee is known (system-logged feedback)", async () => {
+    await dualWriteOutreachFeedback({ kissingerContactId: "kiss_1", thumb: "up", assigneeLower: null });
+
+    expect(outreachFeedbackCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({ loggedBy: null }),
+    });
+  });
+
+  it("does not throw when the contact has not been backfilled into Postgres yet", async () => {
+    contactFindUniqueMock.mockResolvedValue(null);
+
+    await expect(
+      dualWriteOutreachFeedback({ kissingerContactId: "kiss_unknown", thumb: "up", assigneeLower: "ben" })
+    ).resolves.toBeUndefined();
+    expect(outreachFeedbackCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not throw and logs a warning when the Postgres write itself fails", async () => {
+    outreachFeedbackCreateMock.mockRejectedValue(new Error("connection refused"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(
+      dualWriteOutreachFeedback({ kissingerContactId: "kiss_1", thumb: "up", assigneeLower: "ben" })
+    ).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
   });
 });
 
