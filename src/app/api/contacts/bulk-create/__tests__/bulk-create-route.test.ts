@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const contactCreateMock = vi.fn();
 const organizationCreateMock = vi.fn();
+const revalidateTagMock = vi.fn();
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
@@ -25,7 +26,7 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
-vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidateTag: (...args: unknown[]) => revalidateTagMock(...args) }));
 
 import { POST } from "../route";
 import type { BulkCreateResult } from "../route";
@@ -47,6 +48,7 @@ describe("POST /api/contacts/bulk-create", () => {
     fetchSpy = vi.fn().mockRejectedValue(new Error("network calls are not allowed in this test"));
     global.fetch = fetchSpy as unknown as typeof global.fetch;
     contactCreateMock.mockResolvedValue({ id: "pg-1" });
+    revalidateTagMock.mockReset();
   });
 
   afterEach(() => {
@@ -98,5 +100,22 @@ describe("POST /api/contacts/bulk-create", () => {
     expect(json.errors).toHaveLength(1);
     expect(json.errors[0].name).toBe("Bob");
     expect(json.errors[0].reason).toMatch(/unique constraint/);
+  });
+
+  it("still reports the accurate created count when cache revalidation throws", async () => {
+    revalidateTagMock.mockImplementation(() => {
+      throw new Error("Invariant: static generation store missing in revalidateTag");
+    });
+
+    const res = await POST(
+      makeRequest({
+        contacts: [{ name: "Alice" }, { name: "Bob" }],
+      }) as unknown as Parameters<typeof POST>[0]
+    );
+    const json = (await res.json()) as BulkCreateResult;
+
+    expect(res.status).toBe(200);
+    expect(json.created).toBe(2);
+    expect(json.errors).toHaveLength(0);
   });
 });

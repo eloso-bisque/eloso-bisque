@@ -56,7 +56,11 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
   }
 
   const updatedTags = currentTags.filter((t) => t !== PROSPECT_CONTACT_TAG);
-  revalidateTag("contacts");
+  try {
+    revalidateTag("contacts");
+  } catch (err) {
+    console.error("Prospect tag removed, but cache revalidation failed (non-fatal):", err);
+  }
 
   return NextResponse.json({ success: true, tags: updatedTags });
 }

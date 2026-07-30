@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const orgFindUniqueMock = vi.fn();
 const orgUpdateMock = vi.fn();
+const revalidateTagMock = vi.fn();
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
@@ -21,7 +22,7 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
-vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidateTag: (...args: unknown[]) => revalidateTagMock(...args) }));
 
 import { PATCH } from "../route";
 
@@ -45,6 +46,7 @@ describe("PATCH /api/contacts/[id]/stage", () => {
     vi.clearAllMocks();
     fetchSpy = vi.fn().mockRejectedValue(new Error("network calls are not allowed in this test"));
     global.fetch = fetchSpy as unknown as typeof global.fetch;
+    revalidateTagMock.mockReset();
   });
 
   afterEach(() => {
@@ -91,5 +93,22 @@ describe("PATCH /api/contacts/[id]/stage", () => {
 
     expect(res.status).toBe(500);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("still reports success when the Postgres write succeeds but cache revalidation throws", async () => {
+    orgFindUniqueMock.mockResolvedValue({ id: "pg-org-1" });
+    orgUpdateMock.mockResolvedValue({});
+    revalidateTagMock.mockImplementation(() => {
+      throw new Error("Invariant: static generation store missing in revalidateTag");
+    });
+
+    const res = await PATCH(
+      makeRequest({ stage: "Meeting Booked" }) as unknown as Parameters<typeof PATCH>[0],
+      ctx("kis-org-1")
+    );
+    const json = (await res.json()) as { id: string; stage: string };
+
+    expect(res.status).toBe(200);
+    expect(json.stage).toBe("Meeting Booked");
   });
 });

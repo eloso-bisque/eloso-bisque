@@ -13,12 +13,20 @@
  *   - linkedin_url is persisted onto Contact.linkedinUrl.
  *   - A Postgres failure surfaces as a real error response (not a false
  *     "ok: true"), since Postgres is now the operation of record.
+ *   - A cache-revalidation failure (revalidateTag throwing) must NOT surface
+ *     as a false error response — the Postgres write already succeeded by
+ *     that point, so reporting failure would risk the caller retrying and
+ *     creating a duplicate. Regression test for a real bug found 2026-07-30:
+ *     revalidateTag was originally called inside the same try/catch as the
+ *     write, so any revalidation hiccup masqueraded as a failed create even
+ *     though the row was already persisted.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const contactCreateMock = vi.fn();
 const organizationCreateMock = vi.fn();
+const revalidateTagMock = vi.fn();
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
@@ -27,7 +35,7 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
-vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidateTag: (...args: unknown[]) => revalidateTagMock(...args) }));
 
 import { POST } from "../route";
 
@@ -49,6 +57,7 @@ describe("POST /api/contacts/create", () => {
     fetchSpy = vi.fn().mockRejectedValue(new Error("network calls are not allowed in this test"));
     global.fetch = fetchSpy as unknown as typeof global.fetch;
     contactCreateMock.mockResolvedValue({ id: "pg-1" });
+    revalidateTagMock.mockReset();
   });
 
   afterEach(() => {
@@ -108,5 +117,21 @@ describe("POST /api/contacts/create", () => {
     expect(res.status).toBe(500);
     expect(json.ok).toBeUndefined();
     expect(json.error).toBeTruthy();
+  });
+
+  it("still reports success when the Postgres write succeeds but cache revalidation throws", async () => {
+    revalidateTagMock.mockImplementation(() => {
+      throw new Error("Invariant: static generation store missing in revalidateTag");
+    });
+
+    const res = await POST(
+      makeRequest({ name: "Erle Shepard", kind: "person" }) as unknown as Parameters<typeof POST>[0]
+    );
+    const json = (await res.json()) as { ok: boolean; entity: { id: string; name: string } };
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.entity.name).toBe("Erle Shepard");
+    expect(contactCreateMock).toHaveBeenCalledTimes(1);
   });
 });

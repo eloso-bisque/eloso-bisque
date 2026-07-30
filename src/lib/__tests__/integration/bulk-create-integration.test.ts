@@ -1,91 +1,72 @@
 /**
- * Integration test: CSV → bulk-create → Kissinger
+ * Integration test: CSV -> bulk-create -> real Postgres.
  *
- * Requires Kissinger to be running at localhost:8080.
- * Skip with: SKIP_INTEGRATION=true vitest run
+ * Superseded (2026-07-30): the original version of this file predated the
+ * Kissinger disconnect (PR #53) and called Kissinger's `createEntity`
+ * mutation directly, bypassing this app's actual `/api/contacts/bulk-create`
+ * route/`dualWriteCreateEntity` entirely. That made it a false positive: it
+ * proved nothing about what the app currently does (bulk-create no longer
+ * touches Kissinger at all), and worse, it was opt-OUT (`SKIP_INTEGRATION`
+ * had to be explicitly set to *skip* it) with zero cleanup — every default
+ * `npx vitest run` created two more permanent "BulkTest Alice/Bob <ts>"
+ * person entities directly in real production Kissinger. Auditing prod on
+ * 2026-07-30 found 152 such orphaned entities (zero Postgres counterpart,
+ * zero tags) accumulated this way, going back to this file's original
+ * 2026-04-09 commit. They've since been deleted.
  *
- * Run directly with:
+ * This version drives the real current path instead: it calls
+ * `dualWriteCreateEntity` (the same function `POST /api/contacts/create`
+ * and `POST /api/contacts/bulk-create` both call) against a real Postgres
+ * connection, then reads the rows back with a separate `prisma.contact`
+ * query to prove the write actually persisted (not just that the function
+ * resolved without throwing). It never touches Kissinger. Cleanup happens
+ * in `afterAll`, matching the pattern in
+ * `outreach-queue-second-deactivation-integration.test.ts`.
+ *
+ * Opt-in via RUN_INTEGRATION=true (not opt-out) — same rationale as that
+ * sibling file: never run write-side integration tests against whatever
+ * DATABASE_URL happens to be configured without deliberate intent.
+ *
+ * Run against real Postgres:
  *   cd ~/lobster-workspace/projects/eloso-bisque
- *   KISSINGER_API_URL=http://localhost:8080/graphql npm test -- src/lib/__tests__/integration
+ *   export $(grep -E '^DATABASE_URL=' .env.local | xargs)
+ *   RUN_INTEGRATION=true npx vitest run src/lib/__tests__/integration/bulk-create-integration.test.ts
  */
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { parseCsv } from "@/lib/csv-parse";
 
-const KISSINGER_URL =
-  process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
-const KISSINGER_TOKEN = process.env.KISSINGER_API_TOKEN ?? "";
-const SKIP = process.env.SKIP_INTEGRATION === "true";
+const RUN_INTEGRATION = process.env.RUN_INTEGRATION === "true";
+const SKIP = !RUN_INTEGRATION || !process.env.DATABASE_URL;
 
-const TEST_CSV = `name,email,organization
-BulkTest Alice ${Date.now()},bulktest-alice-${Date.now()}@example-test.invalid,BulkTest Corp
-BulkTest Bob ${Date.now()},bulktest-bob-${Date.now()}@example-test.invalid,BulkTest Corp
+describe.skipIf(SKIP)("bulk-create integration (real Postgres, no Kissinger)", () => {
+  // Imported lazily so this file never constructs the module-level
+  // PrismaClient when the suite is skipped (e.g. a plain `npm test` run
+  // with no DATABASE_URL set).
+  let prisma: typeof import("@/lib/prisma").prisma;
+  let dualWriteCreateEntity: typeof import("@/lib/contacts-dual-write").dualWriteCreateEntity;
+  let withOrganizationNote: typeof import("@/lib/contacts-dual-write").withOrganizationNote;
+
+  const runId = Date.now();
+  const TEST_CSV = `name,email,organization
+BulkTest Alice ${runId},bulktest-alice-${runId}@example-test.invalid,BulkTest Corp
+BulkTest Bob ${runId},bulktest-bob-${runId}@example-test.invalid,BulkTest Corp
 `;
 
-const CREATE_ENTITY_MUTATION = `
-  mutation CreateEntity($input: CreateEntityInput!) {
-    createEntity(input: $input) {
-      id
-      name
-      meta { key value }
-    }
-  }
-`;
-
-const SEARCH_QUERY = `
-  query Search($query: String!, $limit: Int) {
-    search(query: $query, limit: $limit) {
-      __typename
-      ... on EntitySearchHitGql {
-        id
-        name
-      }
-    }
-  }
-`;
-
-async function gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (KISSINGER_TOKEN) headers["Authorization"] = `Bearer ${KISSINGER_TOKEN}`;
-
-  const res = await fetch(KISSINGER_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ query, variables }),
-  });
-
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
-  if (json.errors?.length) throw new Error(json.errors.map((e) => e.message).join("; "));
-  return json.data as T;
-}
-
-async function createOne(
-  name: string,
-  email: string,
-  organization: string
-): Promise<{ id: string; name: string }> {
-  const meta: { key: string; value: string }[] = [];
-  if (email) meta.push({ key: "email", value: email });
-  if (organization) meta.push({ key: "company", value: organization });
-
-  const data = await gql<{ createEntity: { id: string; name: string; meta: { key: string; value: string }[] } }>(
-    CREATE_ENTITY_MUTATION,
-    { input: { kind: "person", name, notes: "integration-test", meta } }
-  );
-  return data.createEntity;
-}
-
-describe.skipIf(SKIP)("bulk-create integration (requires Kissinger on localhost:8080)", () => {
-  let createdNames: string[] = [];
+  const createdIds: string[] = [];
 
   beforeAll(async () => {
-    // Verify Kissinger is reachable — skip the whole suite if not
-    try {
-      await fetch(KISSINGER_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: "{ __typename }" }) });
-    } catch {
-      console.warn("Kissinger not reachable — skipping integration tests");
+    ({ prisma } = await import("@/lib/prisma"));
+    ({ dualWriteCreateEntity, withOrganizationNote } = await import("@/lib/contacts-dual-write"));
+  });
+
+  afterAll(async () => {
+    if (createdIds.length > 0) {
+      await prisma.contact.deleteMany({ where: { id: { in: createdIds } } }).catch(() => {
+        // best-effort cleanup
+      });
     }
+    await prisma.$disconnect();
   });
 
   it("parses the test CSV into 2 valid contacts", () => {
@@ -96,31 +77,40 @@ describe.skipIf(SKIP)("bulk-create integration (requires Kissinger on localhost:
     expect(contacts[1].name).toMatch(/BulkTest Bob/);
   });
 
-  it("creates contacts in Kissinger and verifies they exist", async () => {
+  it("creates contacts in real Postgres and reads them back via a separate query", async () => {
     const { contacts } = parseCsv(TEST_CSV);
 
-    // Create each contact
     for (const c of contacts) {
-      const entity = await createOne(
-        c.name,
-        c.email ?? "",
-        c.organization ?? ""
+      const id = crypto.randomUUID();
+      await dualWriteCreateEntity({
+        kissingerId: id,
+        kind: "person",
+        name: c.name,
+        email: c.email,
+        notes: withOrganizationNote(undefined, c.organization),
+      });
+      createdIds.push(
+        (await prisma.contact.findUniqueOrThrow({ where: { kissingerId: id }, select: { id: true } })).id
       );
-      expect(entity.id).toBeTruthy();
-      expect(entity.name).toBe(c.name);
-      createdNames.push(c.name);
     }
 
-    // Verify the contacts exist via search
-    for (const name of createdNames) {
-      const searchData = await gql<{
-        search: { __typename: string; id: string; name: string }[];
-      }>(SEARCH_QUERY, { query: name, limit: 5 });
+    expect(createdIds).toHaveLength(2);
 
-      const hit = searchData.search.find(
-        (h) => h.__typename === "EntitySearchHitGql" && h.name === name
-      );
-      expect(hit, `Expected to find "${name}" in search results`).toBeDefined();
-    }
+    // Read back with a fresh query (not the same call path used to create)
+    // to prove the write actually persisted in Postgres, not just that
+    // dualWriteCreateEntity resolved without throwing.
+    const rows = await prisma.contact.findMany({
+      where: { id: { in: createdIds } },
+      orderBy: { name: "asc" },
+    });
+    expect(rows).toHaveLength(2);
+
+    const alice = rows.find((r) => r.name.startsWith("BulkTest Alice"));
+    const bob = rows.find((r) => r.name.startsWith("BulkTest Bob"));
+    expect(alice).toBeDefined();
+    expect(bob).toBeDefined();
+    expect(alice!.email).toBe(`bulktest-alice-${runId}@example-test.invalid`);
+    expect(alice!.notes).toBe("Company: BulkTest Corp");
+    expect(bob!.email).toBe(`bulktest-bob-${runId}@example-test.invalid`);
   }, 30000);
 });
