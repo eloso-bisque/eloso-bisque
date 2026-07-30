@@ -6,6 +6,7 @@
  */
 
 import { unstable_cache } from "next/cache";
+import { parseNestedMeta, resolveTitleFromMeta, resolveCompanyFromMeta } from "./kissinger-meta";
 
 const KISSINGER_API_URL =
   process.env.KISSINGER_API_URL ?? "http://localhost:8080/graphql";
@@ -1071,27 +1072,15 @@ async function _fetchProspectContacts(assignee: string): Promise<ProspectContact
         );
 
         // Apollo-re-enriched contacts store title/org inside a JSON blob at key "meta"
-        // rather than as direct top-level meta keys. Fall back to the nested blob when
-        // the direct keys are absent.
-        let nestedMeta: Record<string, string> = {};
-        if (meta["meta"]) {
-          try {
-            nestedMeta = JSON.parse(meta["meta"]) as Record<string, string>;
-          } catch {
-            // not JSON — ignore
-          }
-        }
+        // rather than as direct top-level meta keys. resolveTitleFromMeta/
+        // resolveCompanyFromMeta (src/lib/kissinger-meta.ts) fall back to that nested
+        // blob when the direct keys are absent — shared with the backfill's
+        // buildContactPlan so the two never drift apart.
+        const nestedMeta = parseNestedMeta(meta);
 
-        // Title resolution: check direct meta first, then nested JSON blob.
-        // "headline" is used by some LinkedIn-sourced contacts in lieu of "title".
-        const title =
-          meta["title"] ??
-          nestedMeta["title"] ??
-          meta["headline"] ??
-          nestedMeta["headline"] ??
-          "";
+        const title = resolveTitleFromMeta(meta, nestedMeta);
         // company will be resolved after the org fetch (org name is the authoritative fallback)
-        const companyFromMeta = meta["company"] ?? meta["org"] ?? nestedMeta["org"] ?? nestedMeta["company"] ?? "";
+        const companyFromMeta = resolveCompanyFromMeta(meta, nestedMeta);
 
         // Find the linked org via works_at edge
         const worksAtEdge = edgesData.edgesFrom.edges

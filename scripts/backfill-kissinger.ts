@@ -62,6 +62,7 @@ import {
   buildContactPlan,
   buildSignalPlan,
   buildGeneratedMessagePlan,
+  buildSyntheticOrganizationPlan,
   metaToRecord,
   type OrganizationPlan,
   type ContactPlan,
@@ -71,6 +72,7 @@ import { SEED_USERS, SENDER_TO_ANGLE } from "./backfill/constants";
 import {
   buildRelationshipPlan,
   resolveContactOrganization,
+  findSyntheticOrgCandidates,
   buildQueueEntryPlan,
   buildContactEventPlan,
   type EntityKind,
@@ -141,9 +143,28 @@ async function fetchAll(args: Args): Promise<FetchResult> {
   console.log("Fetching edges (edgesFrom for every entity)...");
   // Every edge has exactly one source; scanning edgesFrom over every entity
   // (person AND org) covers the full edge set without needing an edgesTo query.
-  const edgeLists = await mapWithConcurrency(allIds, args.concurrency, fetchEdgesFrom);
+  //
+  // Per-entity error isolation: Kissinger's edgesFrom resolver has, at times,
+  // rejected some relation types (observed: may_know/buys_from/
+  // contract_mfg_for/supplies_to) with a resolver-level "Unknown relation
+  // type" error that fails the *entire* query for that entity, not just the
+  // offending edge. fetchEdgesFrom has no isolation of its own, and
+  // mapWithConcurrency's internal Promise.all means one rejected worker
+  // aborts every other in-flight entity too. Catching per-entity here means
+  // one entity with a problematic edge loses only that entity's edges
+  // (logged as a warning) instead of crashing the whole backfill run.
+  let edgeFetchErrors = 0;
+  const edgeLists = await mapWithConcurrency(allIds, args.concurrency, async (id) => {
+    try {
+      return await fetchEdgesFrom(id);
+    } catch (err) {
+      edgeFetchErrors++;
+      warn("edges", `fetchEdgesFrom(${id}) failed, skipping this entity's edges: ${(err as Error).message}`);
+      return [];
+    }
+  });
   const allEdges = edgeLists.flat();
-  console.log(`  edges fetched: ${allEdges.length}`);
+  console.log(`  edges fetched: ${allEdges.length}${edgeFetchErrors > 0 ? ` (${edgeFetchErrors} entities skipped due to fetch errors)` : ""}`);
 
   console.log("Fetching interactions (persons only — ContactEvent has no organizationId)...");
   const interactionLists = await mapWithConcurrency(personIds, args.concurrency, fetchInteractions);
@@ -191,6 +212,23 @@ function buildPlans(fetched: FetchResult): Plans {
     const arr = worksAtBySource.get(e.source) ?? [];
     arr.push(e);
     worksAtBySource.set(e.source, arr);
+  }
+
+  // Auto-create a synthetic Organization for any contact whose company/org
+  // meta text has no works_at edge and doesn't match a known Organization by
+  // name (see findSyntheticOrgCandidates doc comment). Without this, that
+  // freeform text is real signal the resolution below simply discards —
+  // real prod data showed this was the majority case, not the exception.
+  const syntheticOrgCandidates = findSyntheticOrgCandidates(contactPlans, worksAtBySource, orgKissingerIdByLowerName);
+  for (const candidate of syntheticOrgCandidates) {
+    orgPlans.push(buildSyntheticOrganizationPlan(candidate.kissingerId, candidate.name));
+    orgKissingerIdByLowerName.set(candidate.name.trim().toLowerCase(), candidate.kissingerId);
+  }
+  if (syntheticOrgCandidates.length > 0) {
+    warn(
+      "organizations",
+      `Auto-created ${syntheticOrgCandidates.length} synthetic Organization row(s) for contact company/org meta with no matching Kissinger entity or works_at edge`
+    );
   }
 
   const orgResolutionByContactId = new Map<string, ReturnType<typeof resolveContactOrganization>>();

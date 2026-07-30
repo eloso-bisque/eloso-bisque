@@ -17,6 +17,7 @@ import {
   mapOutreachStage,
   normalizeSectorSlug,
 } from "./mappers";
+import { parseNestedMeta, resolveTitleFromMeta, resolveCompanyFromMeta } from "../../src/lib/kissinger-meta";
 
 export function metaToRecord(meta: KissingerMeta[]): Record<string, string> {
   const record: Record<string, string> = {};
@@ -115,6 +116,44 @@ export function buildOrganizationPlan(entity: KissingerEntity): OrganizationPlan
   };
 }
 
+/**
+ * Builds an OrganizationPlan for a freeform company/org name that has no
+ * corresponding Kissinger Organization entity and no `works_at` edge from
+ * any contact — see `findSyntheticOrgCandidates` (relationships.ts) for how
+ * these names are identified, and `syntheticOrgKissingerId` for how
+ * `kissingerId` is derived. Every field with no real signal is left at a
+ * neutral default rather than guessed.
+ */
+export function buildSyntheticOrganizationPlan(kissingerId: string, name: string): OrganizationPlan {
+  return {
+    kissingerId,
+    name,
+    isArchived: false,
+    isProspect: true,
+    isVcFirm: false,
+    website: null,
+    hq: null,
+    notes:
+      "Auto-created from a prospect contact's company/org meta text; no matching Kissinger Organization entity or works_at edge existed for this name.",
+    industry: null,
+    sectorPrimary: null,
+    employees: null,
+    revenueUsd: null,
+    icpScore: null,
+    fitTier: null,
+    apolloMarketSize: null,
+    funnelStage: "Identified",
+    investmentStage: null,
+    checkSize: null,
+    thesis: null,
+    sectorFit: null,
+    investorPipeline: "Research",
+    sectors: [],
+    tags: ["auto-created"],
+    warnings: [],
+  };
+}
+
 export interface ContactPlan {
   kissingerId: string;
   name: string;
@@ -155,6 +194,13 @@ export function buildContactPlan(entity: KissingerEntity): ContactPlan {
   const outreachStage = mapOutreachStage(meta.outreach_stage);
   if (outreachStage.warning) warnings.push(outreachStage.warning);
 
+  // Mirrors src/lib/kissinger.ts's live title/company resolution exactly
+  // (shared helpers in src/lib/kissinger-meta.ts) — Apollo-re-enriched
+  // contacts store title/org inside a JSON blob at meta key "meta" rather
+  // than as direct top-level meta keys, and some LinkedIn-sourced contacts
+  // use "headline" in lieu of "title".
+  const nestedMeta = parseNestedMeta(meta);
+
   return {
     kissingerId: entity.id,
     name: entity.name,
@@ -162,7 +208,7 @@ export function buildContactPlan(entity: KissingerEntity): ContactPlan {
     email: meta.email ?? null,
     linkedinUrl: meta.linkedin_url ?? meta.linkedin ?? null,
     linkedinConnectedOn: meta.connected_on ?? null,
-    title: meta.title ?? null,
+    title: resolveTitleFromMeta(meta, nestedMeta) || null,
     location: meta.location ?? null,
     isProspectContact: classification.isProspectContact,
     isInvestorContact: classification.isInvestorContact,
@@ -180,7 +226,7 @@ export function buildContactPlan(entity: KissingerEntity): ContactPlan {
     tags: classification.plainTags,
     queueUserId: classification.queueUserId,
     outreachSent: classification.outreachSent,
-    metaCompanyName: meta.company ?? meta.org ?? null,
+    metaCompanyName: resolveCompanyFromMeta(meta, nestedMeta) || null,
     warnings,
   };
 }

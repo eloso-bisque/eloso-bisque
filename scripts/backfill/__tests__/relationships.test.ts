@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildRelationshipPlan,
   resolveContactOrganization,
+  syntheticOrgKissingerId,
+  findSyntheticOrgCandidates,
   buildQueueEntryPlan,
   buildContactEventPlan,
 } from "../relationships";
@@ -104,6 +106,65 @@ describe("resolveContactOrganization", () => {
     const res = resolveContactOrganization([], null, new Map());
     expect(res.organizationKissingerId).toBeNull();
     expect(res.warning).toBeUndefined();
+  });
+});
+
+describe("syntheticOrgKissingerId", () => {
+  it("is deterministic and case/whitespace-insensitive", () => {
+    expect(syntheticOrgKissingerId("Acme Logistics")).toBe(syntheticOrgKissingerId("  acme logistics  "));
+  });
+
+  it("is prefixed to be unambiguously distinct from a real Kissinger entity id", () => {
+    expect(syntheticOrgKissingerId("Acme Logistics")).toMatch(/^synthetic-org:/);
+  });
+});
+
+describe("findSyntheticOrgCandidates", () => {
+  it("flags a contact's company/org meta when it has no works_at edge and no matching Organization name", () => {
+    const candidates = findSyntheticOrgCandidates(
+      [{ kissingerId: "person-1", metaCompanyName: "Widget Manufacturing Co" }],
+      new Map(),
+      new Map()
+    );
+    expect(candidates).toEqual([
+      { kissingerId: syntheticOrgKissingerId("Widget Manufacturing Co"), name: "Widget Manufacturing Co" },
+    ]);
+  });
+
+  it("skips a contact that already has a works_at edge (edge wins, no synthetic org needed)", () => {
+    const candidates = findSyntheticOrgCandidates(
+      [{ kissingerId: "person-1", metaCompanyName: "Widget Manufacturing Co" }],
+      new Map([["person-1", [edge({ target: "org-1" })]]]),
+      new Map()
+    );
+    expect(candidates).toEqual([]);
+  });
+
+  it("skips a contact whose company name already matches a known Organization", () => {
+    const candidates = findSyntheticOrgCandidates(
+      [{ kissingerId: "person-1", metaCompanyName: "Acme Capital" }],
+      new Map(),
+      new Map([["acme capital", "org-9"]])
+    );
+    expect(candidates).toEqual([]);
+  });
+
+  it("skips a contact with no company/org meta at all", () => {
+    const candidates = findSyntheticOrgCandidates([{ kissingerId: "person-1", metaCompanyName: null }], new Map(), new Map());
+    expect(candidates).toEqual([]);
+  });
+
+  it("deduplicates by lowercased/trimmed name so contacts sharing an employer converge on one candidate", () => {
+    const candidates = findSyntheticOrgCandidates(
+      [
+        { kissingerId: "person-1", metaCompanyName: "Widget Manufacturing Co" },
+        { kissingerId: "person-2", metaCompanyName: "  widget manufacturing co  " },
+      ],
+      new Map(),
+      new Map()
+    );
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].name).toBe("Widget Manufacturing Co");
   });
 });
 
