@@ -215,6 +215,12 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// Generated tsvector over name + notes, GIN-indexed. Postgres-managed
+  /// (GENERATED ALWAYS AS ... STORED) — Prisma never writes this column;
+  /// see prisma/migrations/20260730210000_add_fulltext_search for the
+  /// hand-authored SQL and src/lib/contacts-search.ts for the reader.
+  searchVector Unsupported("tsvector")?
+
   // Relations
   contacts          Contact[] // people who work here
   sectors           OrganizationSector[] // many-to-many sector tags
@@ -310,6 +316,10 @@ model Contact {
   bookings          Booking[]
   relationshipsFrom RelationshipFrom[]   @relation("RelationshipSourcePerson")
   relationshipsTo   RelationshipFrom[]   @relation("RelationshipTargetPerson")
+
+  /// Generated tsvector over name + title + notes, GIN-indexed. See
+  /// Organization.searchVector for details — same pattern.
+  searchVector Unsupported("tsvector")?
 
   @@index([isProspectContact, isArchived, outreachStage])
   @@index([isInvestorContact, isArchived])

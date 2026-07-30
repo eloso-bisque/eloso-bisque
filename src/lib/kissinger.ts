@@ -853,6 +853,12 @@ export async function fetchIntroPath(
 
 // ---------------------------------------------------------------------------
 // Search
+//
+// Superseded (issue #59): the Contacts page search box now calls
+// src/lib/contacts-search.ts's searchContactsPostgres() instead, which was
+// the last remaining Kissinger dependency for Contacts search. Kept here
+// (unused by the app) in case other tooling still relies on it — no callers
+// remain in src/app or src/components as of this change.
 // ---------------------------------------------------------------------------
 
 const SEARCH_QUERY = `
