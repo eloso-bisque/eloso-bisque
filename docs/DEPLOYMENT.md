@@ -8,12 +8,17 @@ Jake to run outbound prospecting, investor pipeline, and funnel tracking. **Post
 (via Prisma) is the primary datastore** for all CRUD paths as of the 2026-07-22
 Kissinger→Postgres migration (PRs #41–53) and the 2026-07-22 dual-write removal
 (PR #53). The Kissinger graph CRM (Rust CLI + CozoDB, GraphQL API) is **not
-decommissioned**, but the live frontend only still reads from it for two things:
+decommissioned**, but the live frontend only still reads from it for one thing now:
 
-- The Contacts **"All" tab and search box** — no Postgres equivalent exists yet for
-  Kissinger's ranked cross-entity full-text search.
 - The contact detail **Intro Path** tab — graph (BFS) traversal for warm-intro
   discovery, which Postgres does not model.
+
+The Contacts search box (all segments, including "All") moved to Postgres full-text
+search (generated `tsvector` columns + GIN indexes on `Contact`/`Organization`,
+`ts_rank`-ranked via `src/lib/contacts-search.ts`) in issue #59 — it no longer calls
+Kissinger. The "All" tab's plain (non-search) listing still reads Kissinger
+(`fetchKissingerFunnelData`/`fetchContactsPage`) — that part of the tab was out of
+scope for #59 and is unchanged.
 
 Everything else (contacts CRUD, notes/funnel/investor-pipeline mutations, contact
 events, scores, homepage stats, booking sync) reads and writes Postgres directly.
@@ -56,7 +61,7 @@ it is not exhaustive of every integration (booking/email, Temporal, vault-api) �
 |---|---|---|
 | `DATABASE_URL` | Yes | Postgres connection string (Neon, provisioned via the Vercel marketplace integration). Read by `prisma.config.ts` and `src/lib/prisma.ts`; this is now the primary datastore. |
 | `JWT_SECRET` | Yes | Signing secret for session JWTs (see Auth section below). Read by `src/lib/auth.ts`. |
-| `KISSINGER_API_URL` | Yes | URL of the Kissinger GraphQL endpoint. In production: `https://eloso-awp.myownlobster.ai/kissinger/graphql`. Still required — Kissinger backs the Contacts "All" tab/search and the Intro Path tab (see Overview). |
+| `KISSINGER_API_URL` | Yes | URL of the Kissinger GraphQL endpoint. In production: `https://eloso-awp.myownlobster.ai/kissinger/graphql`. Still required — Kissinger backs the Contacts "All" tab's plain listing and the Intro Path tab (see Overview). |
 | `KISSINGER_API_TOKEN` | Yes | Bearer token for Kissinger API auth. Must match nginx config and `KISSINGER_API_TOKEN` in kissinger-api. |
 | `LOBSTER_INTERNAL_SECRET` | Recommended | Shared secret checked against the `X-Internal-Secret` request header in `src/middleware.ts`, allowing service-to-service calls (e.g. Lobster scheduled jobs) to bypass session auth. |
 
@@ -113,7 +118,7 @@ access, including to `/admin/*`.
 Kissinger GraphQL calls happen **server-side** only, in Next.js Server Components and
 API routes. The client (browser) never sees the API URL or token. As of the
 2026-07-22 migration, this is now a narrow integration — only the Contacts "All"
-tab/search and the Intro Path tab call Kissinger; every other CRUD path reads/writes
+tab's plain listing and the Intro Path tab call Kissinger; every other CRUD path reads/writes
 Postgres directly via Prisma (`src/lib/prisma.ts`).
 
 Client helper: `src/lib/kissinger.ts`
@@ -126,7 +131,7 @@ Client helper: `src/lib/kissinger.ts`
 Browser → Vercel SSR/API routes → DATABASE_URL (Neon Postgres, via Prisma)
 ```
 
-**Production data flow (Kissinger path, search + intro-path only):**
+**Production data flow (Kissinger path, "All" tab listing + intro-path only):**
 ```
 Browser → Vercel SSR → KISSINGER_API_URL (nginx at eloso-awp) → kissinger-api (port 8080) → CozoDB
 ```
@@ -158,7 +163,7 @@ test files with `Cannot find module '.prisma/client/default'` unless you run
 `npx prisma generate` yourself first. No `DATABASE_URL` is required for `generate`
 (only for actually connecting).
 
-Kissinger is only needed locally if you're touching the Contacts "All" tab/search or
+Kissinger is only needed locally if you're touching the Contacts "All" tab's plain listing or
 the Intro Path tab — everything else works against Postgres alone. If you do need it,
 ensure kissinger-api is running locally (`pm2 start kissinger-api` or run the binary
 directly).
@@ -169,7 +174,7 @@ directly).
 - **Language:** TypeScript
 - **Styling:** Tailwind CSS
 - **Primary datastore:** PostgreSQL (Neon) via Prisma ORM (`prisma@7.8.0`, `@prisma/adapter-pg`)
-- **GraphQL client (Kissinger, narrow use — search + intro-path only):** `graphql-request` v7
+- **GraphQL client (Kissinger, narrow use — "All" tab listing + intro-path only):** `graphql-request` v7
 - **Auth:** Cookie session, JWT (`jose`) + bcrypt password hashes (custom, no NextAuth)
 - **Deployment:** Vercel
 
@@ -182,7 +187,7 @@ No `vercel.json` — Vercel auto-detects Next.js and uses its defaults. The only
 | Service | How used | Failure mode |
 |---|---|---|
 | Neon Postgres (`DATABASE_URL`) | Primary datastore for all CRM CRUD (contacts, outreach, funnel, investors, activity) via Prisma | App-wide outage — this is now the primary read/write path |
-| kissinger-api | GraphQL queries for the Contacts "All" tab/search and Intro Path graph traversal only | Returns `null` gracefully; those two features show empty states, everything else is unaffected |
+| kissinger-api | GraphQL queries for the Contacts "All" tab's plain listing and Intro Path graph traversal only | Returns `null` gracefully; those two features show empty states, everything else is unaffected |
 | nginx (eloso-awp.myownlobster.ai) | Public proxy for Kissinger API | Same as above |
 
 The app handles Kissinger being unreachable gracefully — all fetch functions catch errors and return `null`, which the UI renders as empty states (not crashes). Postgres is not treated the same way (no fallback) since it is now the primary store.
