@@ -2,17 +2,17 @@ import Link from "next/link";
 import {
   fetchContactsPage,
   fetchKissingerFunnelData,
-  searchKissinger,
   classifyOrg,
   INVESTOR_PERSON_TAGS,
 } from "@/lib/kissinger";
-import type { EntitySummary, SearchHit, ContactSegment, ContactDetail } from "@/lib/kissinger";
+import type { EntitySummary, ContactSegment, ContactDetail } from "@/lib/kissinger";
 import {
   fetchOrgSegmentFromPostgres,
   fetchOrgSegmentCountsFromPostgres,
   fetchPeopleContactsFromPostgres,
   fetchPeopleCountFromPostgres,
 } from "@/lib/contacts-read";
+import { searchContactsPostgres } from "@/lib/contacts-search";
 import AddNewButton from "@/components/AddNewButton";
 import ContactCard from "@/components/ContactCard";
 import LazyScoreBadge from "@/components/LazyScoreBadge";
@@ -123,7 +123,6 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
   let endCursor: string | null = null;
   let hasPreviousPage = false;
   let offline = false;
-  let searchHits: SearchHit[] = [];
 
   // Tab counts from graphStats (fast — 1 request)
   let tabCounts: Record<ContactSegment, number> = {
@@ -135,17 +134,13 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
   };
 
   if (isSearch) {
-    const hits = await searchKissinger(q, 200);
-    searchHits = hits;
-    const entityHits = hits.filter((h) => h.__typename === "EntitySearchHitGql");
-    const mapped: EntitySummary[] = entityHits.map((h) => ({
-      id: h.id,
-      kind: h.kind ?? "unknown",
-      name: h.name ?? h.id,
-      tags: h.tags ?? [],
-      updatedAt: "",
-      archived: false,
-    }));
+    // Postgres-backed ranked full-text search (issue #59) — replaces
+    // searchKissinger(). Already returns EntitySummary-shaped hits (id =
+    // kissingerId, classification folded into synthetic tags), ranked by
+    // ts_rank and merged across Contact + Organization, so the
+    // classifyOrg()/INVESTOR_PERSON_TAGS segmentation below is unchanged.
+    // See src/lib/contacts-search.ts.
+    const mapped = await searchContactsPostgres(q, 200);
 
     // Filter to segment
     const people = mapped.filter(
@@ -178,7 +173,6 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
       all: mapped,
     };
     contacts = segMap[segment];
-    void searchHits;
   } else if (segment === "all") {
     // "All" tab still combines both kinds straight from Kissinger — not in
     // scope for the Phase 3.3 read migration (GH #44 targets the People /
