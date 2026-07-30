@@ -2,6 +2,15 @@ import { defineConfig, configDefaults } from "vitest/config";
 import path from "path";
 
 export default defineConfig({
+  // tsconfig.json sets "jsx": "preserve" for Next.js's own SWC compiler. Vite/vitest's
+  // oxc-based transform reads that same tsconfig and, left unset, also leaves JSX
+  // un-transformed — this only affects the vitest test runner, not the Next.js build.
+  // Needed so tests can import .tsx Server/Client Components directly (e.g.
+  // src/app/(main)/outreach/__tests__/OutreachContent.test.ts importing
+  // ../OutreachContent.tsx).
+  oxc: {
+    jsx: { runtime: "automatic" },
+  },
   test: {
     environment: "node",
     globals: true,

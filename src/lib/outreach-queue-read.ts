@@ -3,14 +3,21 @@
  *
  * This module implements `fetchProspectContactsFromPostgres` and
  * `fetchSentContactsFromPostgres` as Postgres-native replacements for
- * `fetchProspectContacts`/`fetchSentContacts` in src/lib/kissinger.ts,
- * per the GH #43 read-migration scope. They are built, unit-tested, and
- * ready to use — but they are **deliberately not wired into**
- * src/app/(main)/outreach/page.tsx in this PR. See "Why the cutover is
- * gated" below.
+ * `fetchProspectContacts`/`fetchSentContacts` in src/lib/kissinger.ts.
+ *
+ * **Status: wired into src/app/(main)/outreach/page.tsx as of the
+ * 2026-07-30 cutover.** The Kissinger-based `fetchProspectContacts`/
+ * `fetchSentContacts` in src/lib/kissinger.ts are no longer called from the
+ * Outreach page (they remain in kissinger.ts, unused by this call site, in
+ * case a rollback is needed). `fetchSignalContacts` — the Trigify-signal
+ * read — is untouched and still Kissinger-backed; it was never in scope for
+ * this migration. See "History: why the cutover was originally gated,
+ * and what changed" below for the full trail, since the org/title
+ * completeness numbers referenced there are the reason this took two
+ * PRs to land.
  *
  * ---------------------------------------------------------------------
- * Why the cutover is gated (do not flip this without re-verifying first)
+ * History: why the cutover was originally gated, and what changed
  * ---------------------------------------------------------------------
  *
  * The safety rules for this migration require verifying parity between the
@@ -38,33 +45,36 @@
  * (411 + 579 = 990) — this comment was written while a backfill/assignment
  * process was still populating OutreachQueueEntry rows mid-run, and the PR
  * body's figure was captured after it had progressed further. It does not
- * change the "defer read-path cutover" conclusion — company/title
+ * change the "defer read-path cutover" conclusion at the time — company/title
  * completeness is a per-row property, and the completeness *fraction*
  * (411-row snapshot: 2% org / 38% title; 990-row snapshot: 25.2% org /
  * 62.3% title) stayed well below the 90% `COMPLETENESS_THRESHOLD` at both
  * points in time.
  *
- * Company and title are prominently rendered on every card in the Active and
- * Sent tabs (src/components/OutreachTaskCard.tsx, SentContactsList.tsx).
- * Cutting the read path over today would silently blank these fields for
- * the large majority of Drew/Ben/Jake's real outreach queue — a user-visible
- * regression, not an acceptable trade-off (per the same principle GH #43
- * was scoped with for the GeneratedMessage/Signal gap below).
+ * A follow-up backfill fix (PR #58, 2026-07-29/30) corrected synthetic-org
+ * auto-creation for contacts with unmatched company text, raising org
+ * completeness on the 990 active-queue contacts from 25.2% to 97.6%.
+ * Title completeness stayed exactly 62.3% — PR #58 confirmed this is a hard
+ * ceiling, not a bug: it dumped every meta key across all 990 active-queue
+ * contacts directly from Kissinger and found zero have `title`, `headline`,
+ * or nested-JSON-blob signal for the missing 373. This matches exactly the
+ * 4-field fallback chain `resolveTitleFromMeta` (src/lib/kissinger-meta.ts)
+ * uses. Re-verified directly on 2026-07-30 (`scripts/verify-title-sample.ts`):
+ * for a live sample of 20 of the 373 titleless contacts, the *live Kissinger*
+ * title resolution (same `resolveTitleFromMeta`/`parseNestedMeta` chain
+ * `_fetchProspectContacts` calls) also returns `""` for all 20 — i.e. the
+ * current production page, reading from Kissinger today, already renders a
+ * blank title for these exact rows. Cutting the read path over does not
+ * change what a real user sees for title on any of these rows; it is
+ * provable parity, not an accepted regression. On that basis the 90%
+ * `COMPLETENESS_THRESHOLD` gate in `scripts/verify-outreach-parity.ts` was
+ * overridden for title specifically (org already cleared the gate at 97.6%).
  *
- * This is a data-completeness gap in the underlying Kissinger backfill
- * (GH #41 — organizationId/title extraction from Kissinger meta + works_at
- * edges), not something in scope to fix from within #43. Recommendation:
- * complete/re-run that backfill's org-linking + title-extraction step, then
- * re-run `scripts/verify-outreach-parity.ts` (added in this PR) to confirm
- * before wiring these functions into the page.
- *
- * The Kissinger-based read path in src/lib/kissinger.ts
- * (`fetchProspectContacts`/`fetchSentContacts`) is untouched and remains
- * what src/app/(main)/outreach/page.tsx uses today. To cut over once data
- * is complete: swap those two imports in page.tsx for the ones exported
- * here (`mapContact` already expects the exact same `ProspectContactRaw`
- * shape, so no frontend changes are needed). To roll back after cutting
- * over: swap the imports back.
+ * The underlying data-completeness gap (no title signal anywhere in
+ * Kissinger for these 373 contacts) is real and is not fixed by this
+ * cutover — it would require real external enrichment (Apollo/Clearbit/
+ * LinkedIn-style), tracked as separate follow-up scope, not part of
+ * finishing this migration.
  *
  * ---------------------------------------------------------------------
  * GeneratedMessage / Signal — why these do NOT block the cutover
