@@ -56,9 +56,9 @@ enum FitTier {
 
 /// Message angle — determines which value proposition framing is used.
 enum MessageAngle {
-  vision      // Ben (CEO) — market timing, big picture
-  technical   // Drew (CTO) — implementation, integration
-  strategic   // Jake (COO/CFO) — business outcomes, ROI
+  vision // Ben (CEO) — market timing, big picture
+  technical // Drew (CTO) — implementation, integration
+  strategic // Jake (COO/CFO) — business outcomes, ROI
 }
 
 /// Response type when a prospect replies to outreach.
@@ -110,29 +110,35 @@ enum SignalAction {
   engaged
 }
 
+/// Thumbs up/down vote on a prospect contact from the Outreach queue.
+enum FeedbackThumb {
+  up
+  down
+}
+
 // ============================================================
 // User — internal team members (Ben, Jake, Drew)
 // Previously split across Vercel KV (auth) + SQLite (activity)
 // ============================================================
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  name         String
-  passwordHash String
+  id             String       @id @default(cuid())
+  email          String       @unique
+  name           String
+  passwordHash   String
   /// Outreach sector affinity — drives default queue assignment.
   /// e.g. ["defense", "evtol"] for Ben
-  sectorAffinity String[] @default([])
+  sectorAffinity String[]     @default([])
   /// Message angle assigned to this user for outreach generation.
-  messageAngle MessageAngle
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  messageAngle   MessageAngle
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   // Relations
-  queueEntries     OutreachQueueEntry[]
-  outreachTouches  OutreachTouch[]
-  activityLogs     ActivityLog[]
-  passwordResets   PasswordResetToken[]
+  queueEntries    OutreachQueueEntry[]
+  outreachTouches OutreachTouch[]
+  activityLogs    ActivityLog[]
+  passwordResets  PasswordResetToken[]
 }
 
 // ============================================================
@@ -140,12 +146,12 @@ model User {
 // ============================================================
 
 model PasswordResetToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  token     String   @unique
+  token     String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -163,59 +169,59 @@ model Organization {
   kissingerId String? @unique
 
   // Classification — mutually exclusive; an org is either a prospect or a VC firm.
-  isProspect  Boolean @default(false)
-  isVcFirm    Boolean @default(false)
-  isArchived  Boolean @default(false)
+  isProspect Boolean @default(false)
+  isVcFirm   Boolean @default(false)
+  isArchived Boolean @default(false)
 
   // Common fields
-  website     String?
-  hq          String?   // "Austin, TX" — freeform location string
-  notes       String?
-  logoUrl     String?
+  website String?
+  hq      String? // "Austin, TX" — freeform location string
+  notes   String?
+  logoUrl String?
 
   // Prospect-specific fields
-  industry    String?   // e.g. "Aerospace & Defense"
+  industry             String? // e.g. "Aerospace & Defense"
   /// Primary sector slug — drives sector heatmap and assignment routing
-  sectorPrimary String?
-  employees   Int?
+  sectorPrimary        String?
+  employees            Int?
   /// Revenue as a float in USD (store normalised; display formatted)
-  revenueUsd  Float?
+  revenueUsd           Float?
   /// ICP score 0–100, stored after computation so listing queries can sort/filter
-  icpScore    Float?
+  icpScore             Float?
   /// Fit tier derived from icpScore
-  fitTier     FitTier?
+  fitTier              FitTier?
   /// Known number of suppliers in the graph (used for supply chain complexity scoring)
-  knownSuppliers Int @default(0)
+  knownSuppliers       Int         @default(0)
   /// Known number of customers in the graph
-  knownCustomers Int @default(0)
+  knownCustomers       Int         @default(0)
   /// Apollo market size estimate for this sector (from Apollo data)
-  apolloMarketSize Float?
+  apolloMarketSize     Float?
   /// Sales funnel stage on the Kanban board
-  funnelStage FunnelStage @default(Identified)
+  funnelStage          FunnelStage @default(Identified)
   funnelStageUpdatedAt DateTime?
 
   // VC-firm-specific fields
   /// Investment stage focus: "seed", "series-a", etc. (stored as freeform string
   /// because the taxonomy varies widely; enum would be too rigid)
-  investmentStage  String?
-  checkSize        String?   // "$500K–$3M" — kept as formatted string per existing UI
-  thesis           String?
-  sectorFit        String?   // freeform notes on sector alignment
-  investorPipeline InvestorPipelineStage @default(Research)
+  investmentStage           String?
+  checkSize                 String? // "$500K–$3M" — kept as formatted string per existing UI
+  thesis                    String?
+  sectorFit                 String? // freeform notes on sector alignment
+  investorPipeline          InvestorPipelineStage @default(Research)
   investorPipelineUpdatedAt DateTime?
   /// Investor fit score 0–100
-  investorFitScore Float?
+  investorFitScore          Float?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  contacts      Contact[]           // people who work here
-  sectors       OrganizationSector[] // many-to-many sector tags
-  tags          OrganizationTag[]
-  relationshipsTo   RelationshipFrom[] @relation("RelationshipTarget")
-  relationshipsFrom RelationshipFrom[] @relation("RelationshipSourceOrg")
-  queueEntries  OutreachQueueEntry[]
+  contacts          Contact[] // people who work here
+  sectors           OrganizationSector[] // many-to-many sector tags
+  tags              OrganizationTag[]
+  relationshipsTo   RelationshipFrom[]   @relation("RelationshipTarget")
+  relationshipsFrom RelationshipFrom[]   @relation("RelationshipSourceOrg")
+  queueEntries      OutreachQueueEntry[]
 
   @@index([isProspect, isArchived])
   @@index([isVcFirm, isArchived])
@@ -237,13 +243,13 @@ model Contact {
   kissingerId String? @unique
 
   // Identity
-  email       String?
-  linkedinUrl String?
+  email               String?
+  linkedinUrl         String?
   /// Date the team member connected with this person on LinkedIn (ISO date string)
   linkedinConnectedOn String?
-  title       String?
+  title               String?
   /// Freeform location string from their LinkedIn profile
-  location    String?
+  location            String?
 
   // Classification
   isProspectContact Boolean @default(false)
@@ -254,17 +260,17 @@ model Contact {
   organizationId String?
   organization   Organization? @relation(fields: [organizationId], references: [id])
   /// Role at the organization (extracted from works_at edge notes in Kissinger)
-  roleAtOrg     String?
+  roleAtOrg      String?
   /// Connection strength to the employer org (0.0–1.0)
-  orgStrength   Float?
+  orgStrength    Float?
 
   // Notes
-  notes       String?
+  notes String?
 
   // Scores
   /// Eloso Fit Score 0–100 (contact-level)
-  fitScore    Float?
-  fitTier     FitTier?
+  fitScore         Float?
+  fitTier          FitTier?
   /// Investor Fit Score 0–100 (for investor contacts)
   investorFitScore Float?
 
@@ -277,16 +283,16 @@ model Contact {
   lastSignalDate     DateTime?
   lastSignalKeyword  String?
   lastSignalUrl      String?
-  signalDismissed    Boolean  @default(false)
+  signalDismissed    Boolean   @default(false)
   signalSnoozedUntil DateTime?
 
   // Investor-specific fields
   /// Inferred or explicit incentive description for investor contacts
-  incentive        String?
+  incentive     String?
   /// Warm intro path description (freeform notes on how to get introduced)
-  warmIntroPath    String?
+  warmIntroPath String?
   /// Investor priority: "high", "medium", "low" (freeform for now; could be enum)
-  priority         String?
+  priority      String?
 
   // Timestamps
   createdAt DateTime @default(now())
@@ -300,9 +306,10 @@ model Contact {
   generatedMessages GeneratedMessage[]
   signals           Signal[]
   events            ContactEvent[]
+  feedback          OutreachFeedback[]
   bookings          Booking[]
-  relationshipsFrom RelationshipFrom[] @relation("RelationshipSourcePerson")
-  relationshipsTo   RelationshipFrom[] @relation("RelationshipTargetPerson")
+  relationshipsFrom RelationshipFrom[]   @relation("RelationshipSourcePerson")
+  relationshipsTo   RelationshipFrom[]   @relation("RelationshipTargetPerson")
 
   @@index([isProspectContact, isArchived, outreachStage])
   @@index([isInvestorContact, isArchived])
@@ -348,10 +355,10 @@ model OrganizationTag {
 // ============================================================
 
 model Sector {
-  slug        String @id   // e.g. "defense-aerospace", "rail-transportation-equipment"
-  displayName String       // e.g. "Aerospace & Defense", "Rail & Transportation"
+  slug             String  @id // e.g. "defense-aerospace", "rail-transportation-equipment"
+  displayName      String // e.g. "Aerospace & Defense", "Rail & Transportation"
   /// Which team member is the default assignee for contacts in this sector
-  defaultAssignee String?  // "Ben" | "Jake" | "Drew"
+  defaultAssignee  String? // "Ben" | "Jake" | "Drew"
   /// Apollo market size for this sector (for the heatmap tile)
   apolloMarketSize Float?
 
@@ -436,13 +443,13 @@ model RelationshipFrom {
 // ============================================================
 
 model OutreachQueueEntry {
-  id         String   @id @default(cuid())
-  contactId  String
-  userId     String
+  id             String  @id @default(cuid())
+  contactId      String
+  userId         String
   /// The organization this contact belongs to (denormalized for list queries)
   organizationId String?
 
-  isActive   Boolean  @default(true)
+  isActive          Boolean @default(true)
   /// Why the entry was deactivated, if applicable
   deactivatedReason String? // "skipped" | "sent" | "responded" | "reassigned"
 
@@ -451,13 +458,13 @@ model OutreachQueueEntry {
   /// Current stage (mirrors Contact.outreachStage; kept here for queue-level queries)
   currentStage      OutreachStage @default(cold)
 
-  assignedAt   DateTime @default(now())
+  assignedAt    DateTime  @default(now())
   deactivatedAt DateTime?
-  updatedAt    DateTime @updatedAt
+  updatedAt     DateTime  @updatedAt
 
-  contact      Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  user         User          @relation(fields: [userId], references: [id])
-  organization Organization? @relation(fields: [organizationId], references: [id])
+  contact      Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id])
+  organization Organization?   @relation(fields: [organizationId], references: [id])
   touches      OutreachTouch[]
 
   // Invariant: at most one *active* entry per contact. A plain @@unique on
@@ -493,23 +500,23 @@ model OutreachQueueEntry {
 // ============================================================
 
 model OutreachTouch {
-  id              String   @id @default(cuid())
-  contactId       String
-  queueEntryId    String?
-  userId          String   // who sent it
-  touchNumber     Int      // 1, 2, or 3
+  id                 String        @id @default(cuid())
+  contactId          String
+  queueEntryId       String?
+  userId             String // who sent it
+  touchNumber        Int // 1, 2, or 3
   /// The message text as actually sent (snapshot)
-  messageBody     String?
+  messageBody        String?
   /// Reference to the stored GeneratedMessage (if AI-generated)
   generatedMessageId String?
   /// The angle used for this message
-  angle           MessageAngle?
+  angle              MessageAngle?
   /// Stage before this touch
-  stageBeforeTouch OutreachStage
+  stageBeforeTouch   OutreachStage
   /// Stage after this touch (advanced by mutation)
-  stageAfterTouch  OutreachStage
-  sentAt          DateTime @default(now())
-  createdAt       DateTime @default(now())
+  stageAfterTouch    OutreachStage
+  sentAt             DateTime      @default(now())
+  createdAt          DateTime      @default(now())
 
   contact          Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
   queueEntry       OutreachQueueEntry? @relation(fields: [queueEntryId], references: [id])
@@ -532,7 +539,7 @@ model OutreachTouch {
 model OutreachResponse {
   id           String       @id @default(cuid())
   contactId    String
-  userId       String?      // who logged the response (null = system)
+  userId       String? // who logged the response (null = system)
   responseType ResponseType
   notes        String?
   respondedAt  DateTime     @default(now())
@@ -558,21 +565,21 @@ model OutreachResponse {
 // ============================================================
 
 model GeneratedMessage {
-  id          String       @id @default(cuid())
-  contactId   String
+  id               String       @id @default(cuid())
+  contactId        String
   /// Which team member's angle/persona this was generated for
-  angle       MessageAngle
+  angle            MessageAngle
   /// "ai" or "template"
-  generationMethod String   @default("template")
+  generationMethod String       @default("template")
   /// The model used for AI generation (e.g. "claude-opus-4-5")
-  modelId     String?
-  messageBody String
+  modelId          String?
+  messageBody      String
   /// Whether this is the currently active message for this contact+angle combo
-  isActive    Boolean      @default(true)
-  generatedAt DateTime     @default(now())
-  createdAt   DateTime     @default(now())
+  isActive         Boolean      @default(true)
+  generatedAt      DateTime     @default(now())
+  createdAt        DateTime     @default(now())
 
-  contact Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
   touches OutreachTouch[]
 
   @@index([contactId, angle, isActive])
@@ -602,7 +609,7 @@ model Signal {
 
   // User action on this signal
   action       SignalAction?
-  actionBy     String?      // userId
+  actionBy     String? // userId
   snoozedUntil DateTime?
   actionAt     DateTime?
 
@@ -636,6 +643,40 @@ model ContactEvent {
   contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   @@index([contactId, occurredAt])
+}
+
+// ============================================================
+// OutreachFeedback — thumbs up/down vote on a prospect contact,
+// given from the Outreach queue.
+//
+// Previously: stored as Kissinger entity meta fields (feedback_thumb,
+// feedback_text, feedback_date) via /api/outreach/feedback — each new
+// vote overwrote the last, so only the most recent vote survived. A
+// side-channel ContactEvent (kind=Note) was also written on every vote
+// purely to keep an append-only history, since meta had none.
+//
+// Flagged as a known gap in PR #48 / GH #43 ("no dedicated Postgres
+// model in scope, would require a schema.prisma change") and never
+// closed — this route is still Kissinger-only as of the dual-write
+// removal in PR #53. Added here as a first-class table so the full
+// vote history is queryable directly (e.g. thumbs-down rate per
+// contact/sector) without overloading ContactEvent's freeform
+// subject/notes fields for a structured signal.
+// ============================================================
+
+model OutreachFeedback {
+  id        String        @id @default(cuid())
+  contactId String
+  thumb     FeedbackThumb
+  text      String?
+  /// User who logged the feedback (null = system/unattributed)
+  loggedBy  String?
+  createdAt DateTime      @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, createdAt])
+  @@index([thumb])
 }
 
 // ============================================================
@@ -675,25 +716,25 @@ model ActivityLog {
 // ============================================================
 
 model Booking {
-  id              String   @id @default(cuid())
-  guestName       String
-  guestEmail      String
-  guestNotes      String   @default("")
-  startUtc        DateTime
-  endUtc          DateTime
-  durationMinutes Int
-  timezone        String   // IANA tz string, e.g. "America/New_York"
-  status          BookingStatus @default(confirmed)
-  cancelToken     String   @unique
-  rescheduleToken String   @unique
-  cancelTokenUsed     Boolean @default(false)
-  rescheduleTokenUsed Boolean @default(false)
-  reminder24hSent Boolean @default(false)
-  reminder1hSent  Boolean @default(false)
+  id                  String        @id @default(cuid())
+  guestName           String
+  guestEmail          String
+  guestNotes          String        @default("")
+  startUtc            DateTime
+  endUtc              DateTime
+  durationMinutes     Int
+  timezone            String // IANA tz string, e.g. "America/New_York"
+  status              BookingStatus @default(confirmed)
+  cancelToken         String        @unique
+  rescheduleToken     String        @unique
+  cancelTokenUsed     Boolean       @default(false)
+  rescheduleTokenUsed Boolean       @default(false)
+  reminder24hSent     Boolean       @default(false)
+  reminder1hSent      Boolean       @default(false)
   /// If this guest was matched to a Contact in the CRM, link here
-  contactId       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  contactId           String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
   contact Contact? @relation(fields: [contactId], references: [id])
 

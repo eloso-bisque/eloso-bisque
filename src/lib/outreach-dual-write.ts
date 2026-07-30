@@ -34,7 +34,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import type { MessageAngle, ResponseType } from "@prisma/client";
+import type { FeedbackThumb, MessageAngle, ResponseType } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -375,6 +375,52 @@ export async function dualWriteOutreachResponse(params: DualWriteOutreachRespons
   } catch (err) {
     console.warn(
       "[outreach-dual-write] dualWriteOutreachResponse failed:",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Feedback (thumbs up/down) -> OutreachFeedback
+// ---------------------------------------------------------------------------
+
+export interface DualWriteOutreachFeedbackParams {
+  kissingerContactId: string;
+  thumb: FeedbackThumb;
+  text?: string;
+  /** Lowercase assignee name ("ben" | "jake" | "drew") of whoever logged the
+   *  feedback, or null if unknown/system. OutreachFeedback.loggedBy is a
+   *  plain freeform string (not a User FK — see the model's doc comment in
+   *  schema.prisma), so this is stored as-is with no User-row resolution. */
+  assigneeLower: string | null;
+}
+
+/**
+ * Dual-write for POST /api/outreach/feedback. Kissinger's entity-meta write
+ * remains the operation of record for this route (the Outreach subsystem is
+ * still on the Kissinger side of the PR #53 disconnect — see that route's
+ * doc comment), so this follows the same never-throw contract as every other
+ * function in this file: a missing Postgres Contact row or a Postgres outage
+ * is logged and swallowed, never surfaced to the caller.
+ */
+export async function dualWriteOutreachFeedback(params: DualWriteOutreachFeedbackParams): Promise<void> {
+  const { kissingerContactId, thumb, text, assigneeLower } = params;
+
+  const contact = await resolveContactByKissingerId(kissingerContactId);
+  if (!contact) return;
+
+  try {
+    await prisma.outreachFeedback.create({
+      data: {
+        contactId: contact.id,
+        thumb,
+        text: text || null,
+        loggedBy: assigneeLower,
+      },
+    });
+  } catch (err) {
+    console.warn(
+      "[outreach-dual-write] dualWriteOutreachFeedback failed:",
       err instanceof Error ? err.message : err
     );
   }
