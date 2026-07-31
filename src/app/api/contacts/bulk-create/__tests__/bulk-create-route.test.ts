@@ -162,6 +162,40 @@ describe("POST /api/contacts/bulk-create", () => {
     expect(json.errors[0].reason).toMatch(/duplicate email within this batch/i);
   });
 
+  it("passes a row's linkedinUrl through to the Contact create call", async () => {
+    // Regression test for the linkedin_url bulk-import gap: ParsedContact
+    // previously had no linkedinUrl field at all, so bulk-imported contacts
+    // could never get one, unlike single-add (POST /api/contacts/create),
+    // which has always accepted a LinkedIn URL.
+    await POST(
+      makeRequest({
+        contacts: [
+          {
+            name: "Alice",
+            email: "alice@example.com",
+            linkedinUrl: "https://linkedin.com/in/alice",
+          },
+        ],
+      }) as unknown as Parameters<typeof POST>[0]
+    );
+
+    const call = contactCreateMock.mock.calls[0][0] as {
+      data: { linkedinUrl: string | null };
+    };
+    expect(call.data.linkedinUrl).toBe("https://linkedin.com/in/alice");
+  });
+
+  it("sets linkedinUrl to null when a row has none", async () => {
+    await POST(
+      makeRequest({ contacts: [{ name: "Alice" }] }) as unknown as Parameters<typeof POST>[0]
+    );
+
+    const call = contactCreateMock.mock.calls[0][0] as {
+      data: { linkedinUrl: string | null };
+    };
+    expect(call.data.linkedinUrl).toBeNull();
+  });
+
   it("does not run the duplicate check for rows with no email", async () => {
     const res = await POST(
       makeRequest({ contacts: [{ name: "Alice" }] }) as unknown as Parameters<typeof POST>[0]

@@ -207,7 +207,7 @@ export default function BulkAddModal({
                   id="bulk-csv-input"
                   rows={8}
                   placeholder={
-                    "name,email,organization\nAlice Smith,alice@example.com,Acme Corp\nBob Jones,bob@example.com,"
+                    "name,email,organization,linkedin_url\nAlice Smith,alice@example.com,Acme Corp,https://linkedin.com/in/alicesmith\nBob Jones,bob@example.com,,"
                   }
                   value={csvText}
                   onChange={(e) => setCsvText(e.target.value)}
@@ -215,8 +215,8 @@ export default function BulkAddModal({
                 />
                 <p className="text-xs text-bisque-400 mt-1">
                   Columns: <code>name</code>, <code>email</code>,{" "}
-                  <code>organization</code> — headers optional, blank rows
-                  skipped.
+                  <code>organization</code>, <code>linkedin_url</code> —
+                  headers optional, blank rows skipped.
                 </p>
               </div>
 
@@ -267,6 +267,9 @@ export default function BulkAddModal({
                         <th className="text-left px-3 py-2 font-semibold text-bisque-800">
                           Organization
                         </th>
+                        <th className="text-left px-3 py-2 font-semibold text-bisque-800">
+                          LinkedIn
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -285,6 +288,9 @@ export default function BulkAddModal({
                           </td>
                           <td className="px-3 py-2 text-bisque-600">
                             {c.organization || <span className="text-bisque-300">—</span>}
+                          </td>
+                          <td className="px-3 py-2 text-bisque-600">
+                            {c.linkedinUrl || <span className="text-bisque-300">—</span>}
                           </td>
                         </tr>
                       ))}

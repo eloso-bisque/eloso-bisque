@@ -5,21 +5,31 @@
  * errors. Designed to be used both server-side (API route) and in tests.
  *
  * Expected CSV shape (headers optional):
- *   name, email, organization
+ *   name, email, organization, linkedin_url
  *
  * Rules:
  * - If the first row looks like headers (contains "name", "email", "org", etc.)
  *   it is skipped and column mapping is derived from it.
- * - If no headers are detected, columns are assumed to be: name, email, organization.
+ * - If no headers are detected, columns are assumed to be: name, email, organization, linkedin_url.
  * - Blank rows are silently skipped.
  * - Rows with no usable data after trimming are skipped.
  * - A row is flagged with a validation error if it has no name AND no email.
+ *
+ * linkedin_url is optional and headerless-mode only recognizes it as the 4th
+ * column — added so bulk import has parity with the single-add form, which
+ * has always accepted a LinkedIn URL (see AddContactModal.tsx / POST
+ * /api/contacts/create). Before this, a CSV had no way to carry a LinkedIn
+ * URL at all: the field didn't exist on ParsedContact, so it was silently
+ * unsupported (not merely dropped) for every bulk-imported contact,
+ * including via the "New Batch" cadence, sent-contact list, and outreach
+ * message generation, which all render/use Contact.linkedinUrl.
  */
 
 export interface ParsedContact {
   name: string;
   email?: string;
   organization?: string;
+  linkedinUrl?: string;
 }
 
 export interface ParseResult {
@@ -75,6 +85,9 @@ const HEADER_KEYWORDS = new Set([
   "fullname",
   "mail",
   "e-mail",
+  "linkedin",
+  "linkedin_url",
+  "linkedinurl",
 ]);
 
 /** Returns true if the row looks like a CSV header row. */
@@ -86,7 +99,7 @@ function isHeaderRow(fields: string[]): boolean {
 /** Map a header-derived field name to our canonical key. */
 function mapHeaderToKey(
   header: string
-): "name" | "email" | "organization" | null {
+): "name" | "email" | "organization" | "linkedinUrl" | null {
   const h = header.toLowerCase().replace(/[-\s]+/g, "_");
   if (["name", "full_name", "fullname", "contact_name"].includes(h))
     return "name";
@@ -106,6 +119,10 @@ function mapHeaderToKey(
     ].includes(h)
   )
     return "organization";
+  if (
+    ["linkedin", "linkedin_url", "linkedinurl", "linkedin_profile"].includes(h)
+  )
+    return "linkedinUrl";
   return null;
 }
 
@@ -127,13 +144,13 @@ export function parseCsv(raw: string): ParseResult {
   const hadHeaders = isHeaderRow(firstFields);
 
   // Build column index → canonical key mapping
-  let colMap: ("name" | "email" | "organization" | null)[];
+  let colMap: ("name" | "email" | "organization" | "linkedinUrl" | null)[];
 
   if (hadHeaders) {
     colMap = firstFields.map(mapHeaderToKey);
   } else {
-    // Default column order: name, email, organization
-    colMap = ["name", "email", "organization"];
+    // Default column order: name, email, organization, linkedin_url
+    colMap = ["name", "email", "organization", "linkedinUrl"];
   }
 
   const dataLines = hadHeaders ? lines.slice(1) : lines;
@@ -179,6 +196,7 @@ export function parseCsv(raw: string): ParseResult {
       name: mapped.name ?? "",
       email: mapped.email,
       organization: mapped.organization,
+      linkedinUrl: mapped.linkedinUrl,
     });
   }
 
