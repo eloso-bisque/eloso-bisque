@@ -117,6 +117,7 @@ export async function POST(request: NextRequest) {
         kind,
         name,
         email: contact.email,
+        linkedinUrl: contact.linkedinUrl,
         notes: withOrganizationNote(undefined, contact.organization),
       });
       created++;

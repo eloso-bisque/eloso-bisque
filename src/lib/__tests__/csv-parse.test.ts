@@ -161,4 +161,61 @@ describe("parseCsv", () => {
     const result = parseCsv("name,email\r\nAlice,alice@example.com\r\nBob,bob@example.com");
     expect(result.contacts).toHaveLength(2);
   });
+
+  // -------------------------------------------------------------------------
+  // LinkedIn URL column — parity with the single-add form, which has always
+  // accepted a LinkedIn URL. Before this, ParsedContact had no linkedinUrl
+  // field at all, so a bulk-imported contact's LinkedIn URL was silently
+  // unsupported (not just dropped) end to end — csv-parse.ts, bulk-create's
+  // route.ts, BulkAddModal.tsx.
+  // -------------------------------------------------------------------------
+
+  it("detects 'linkedin_url' as a header and maps it", () => {
+    const csv = "name,email,linkedin_url\nAlice,alice@example.com,https://linkedin.com/in/alice";
+    const result = parseCsv(csv);
+    expect(result.hadHeaders).toBe(true);
+    expect(result.contacts[0]).toEqual({
+      name: "Alice",
+      email: "alice@example.com",
+      organization: undefined,
+      linkedinUrl: "https://linkedin.com/in/alice",
+    });
+  });
+
+  it("detects 'linkedin' (bare) as a header alias", () => {
+    const csv = "name,linkedin\nBob,https://linkedin.com/in/bob";
+    const result = parseCsv(csv);
+    expect(result.contacts[0].linkedinUrl).toBe("https://linkedin.com/in/bob");
+  });
+
+  it("parses linkedin_url as the 4th column in headerless CSV", () => {
+    const result = parseCsv(
+      "Alice,alice@example.com,Acme Corp,https://linkedin.com/in/alice"
+    );
+    expect(result.hadHeaders).toBe(false);
+    expect(result.contacts[0]).toEqual({
+      name: "Alice",
+      email: "alice@example.com",
+      organization: "Acme Corp",
+      linkedinUrl: "https://linkedin.com/in/alice",
+    });
+  });
+
+  it("leaves linkedinUrl undefined when the column is absent (backward compatible)", () => {
+    const csv = "name,email,organization\nAlice,alice@example.com,Acme";
+    const result = parseCsv(csv);
+    expect(result.contacts[0].linkedinUrl).toBeUndefined();
+  });
+
+  it("handles a 3-column headerless CSV without a trailing linkedin_url value", () => {
+    // Regression check: adding a 4th default column must not break existing
+    // 3-field rows (fields[3] is simply undefined, not an off-by-one error).
+    const result = parseCsv("Alice,alice@example.com,Acme Corp");
+    expect(result.contacts[0]).toEqual({
+      name: "Alice",
+      email: "alice@example.com",
+      organization: "Acme Corp",
+      linkedinUrl: undefined,
+    });
+  });
 });
