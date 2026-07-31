@@ -1,14 +1,18 @@
 /**
  * GET /api/contacts/[id]/intro-path
  *
- * Queries Kissinger for the shortest warm intro path from any team member
- * (configured via TEAM_PERSON_IDS env var) to the target contact.
+ * Queries Postgres for the shortest warm intro path from any team member
+ * (configured via TEAM_PERSON_IDS env var) to the target contact, via a BFS
+ * over "knows" RelationshipFrom edges. Previously called Kissinger directly
+ * (fetchIntroPath in src/lib/kissinger.ts) — Drew's 2026-07-31 instruction
+ * superseded his earlier explicit exception for this route; see
+ * src/lib/intro-path-read.ts for the migration rationale and parity notes.
  *
  * Response: IntroPathResult — { found, hops, steps[] }
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { fetchIntroPath } from "@/lib/kissinger";
+import { fetchIntroPathFromPostgres } from "@/lib/intro-path-read";
 
 export async function GET(
   _req: NextRequest,
@@ -18,7 +22,7 @@ export async function GET(
   const id = decodeURIComponent(rawId);
 
   try {
-    const result = await fetchIntroPath(id);
+    const result = await fetchIntroPathFromPostgres(id);
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
