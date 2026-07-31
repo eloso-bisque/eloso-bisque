@@ -285,3 +285,102 @@ export async function fetchPeopleCountFromPostgres(): Promise<number | null> {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// "All" tab compound cursor — people and orgs paginate independently (two
+// different Postgres id spaces) but the page only has one opaque `after`
+// query param to work with. Encode/decode as "<personCursor>::<orgCursor>".
+// Prisma cuids never contain "::", so this round-trips unambiguously. Pure,
+// unit-tested directly (no I/O).
+// ---------------------------------------------------------------------------
+
+export function encodeAllTabCursor(personCursor: string | null, orgCursor: string | null): string {
+  return `${personCursor ?? ""}::${orgCursor ?? ""}`;
+}
+
+export function decodeAllTabCursor(cursor: string | undefined): { personAfter?: string; orgAfter?: string } {
+  if (!cursor) return {};
+  const [personAfter, orgAfter] = cursor.split("::");
+  return { personAfter: personAfter || undefined, orgAfter: orgAfter || undefined };
+}
+
+// ---------------------------------------------------------------------------
+// "All" tab — every non-archived organization, any classification.
+// Postgres replacement for the last remaining Kissinger read on the
+// Contacts page (fetchKissingerFunnelData() + fetchContactsPage("org", ...)
+// with no segment filter). Mirrors the People pagination pattern above
+// exactly, just without the isVcFirm/isProspect where-clause restriction
+// fetchOrgSegmentFromPostgres applies.
+// ---------------------------------------------------------------------------
+
+/**
+ * Postgres replacement for `fetchContactsPage("org", pageSize, after)` with
+ * no segment filter — every non-archived org regardless of
+ * isVcFirm/isProspect classification, cursor-paginated the same way
+ * `fetchPeopleContactsFromPostgres` is.
+ */
+export async function fetchAllOrgsPageFromPostgres(
+  pageSize: number,
+  afterId?: string
+): Promise<PeoplePage | null> {
+  try {
+    const rows = await prisma.organization.findMany({
+      where: { isArchived: false },
+      select: {
+        id: true,
+        kissingerId: true,
+        name: true,
+        hq: true,
+        updatedAt: true,
+        isArchived: true,
+        tags: { select: { tag: true } },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: pageSize + 1,
+      ...(afterId ? { cursor: { id: afterId }, skip: 1 } : {}),
+    });
+
+    const hasNextPage = rows.length > pageSize;
+    const page = rows.slice(0, pageSize);
+    const contacts: EntitySummary[] = [];
+    for (const row of page) {
+      const entity = orgToEntitySummary(row);
+      if (entity) contacts.push(entity);
+    }
+    const endCursor = hasNextPage ? page[page.length - 1]?.id ?? null : null;
+
+    return { contacts, hasNextPage, endCursor };
+  } catch (err) {
+    console.warn(
+      "[contacts-read] fetchAllOrgsPageFromPostgres failed:",
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+/** Total non-archived org count (any classification) — used for the "All" tab's Kissinger-corpus-equivalent badge. */
+export async function fetchAllOrgsCountFromPostgres(): Promise<number | null> {
+  try {
+    return await prisma.organization.count({ where: { isArchived: false } });
+  } catch (err) {
+    console.warn(
+      "[contacts-read] fetchAllOrgsCountFromPostgres failed:",
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+/** Total non-archived contact count, INCLUDING investor contacts — used for the "All" tab's Kissinger-corpus-equivalent badge. */
+export async function fetchAllPeopleCountFromPostgres(): Promise<number | null> {
+  try {
+    return await prisma.contact.count({ where: { isArchived: false } });
+  } catch (err) {
+    console.warn(
+      "[contacts-read] fetchAllPeopleCountFromPostgres failed:",
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
