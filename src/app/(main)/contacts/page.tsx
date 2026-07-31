@@ -1,16 +1,16 @@
 import Link from "next/link";
-import {
-  fetchContactsPage,
-  fetchKissingerFunnelData,
-  classifyOrg,
-  INVESTOR_PERSON_TAGS,
-} from "@/lib/kissinger";
+import { classifyOrg, INVESTOR_PERSON_TAGS } from "@/lib/kissinger";
 import type { EntitySummary, ContactSegment, ContactDetail } from "@/lib/kissinger";
 import {
   fetchOrgSegmentFromPostgres,
   fetchOrgSegmentCountsFromPostgres,
   fetchPeopleContactsFromPostgres,
   fetchPeopleCountFromPostgres,
+  fetchAllOrgsPageFromPostgres,
+  fetchAllOrgsCountFromPostgres,
+  fetchAllPeopleCountFromPostgres,
+  encodeAllTabCursor,
+  decodeAllTabCursor,
 } from "@/lib/contacts-read";
 import { searchContactsPostgres } from "@/lib/contacts-search";
 import AddNewButton from "@/components/AddNewButton";
@@ -174,42 +174,54 @@ export default async function ContactsPage({ searchParams }: ContactsPageProps) 
     };
     contacts = segMap[segment];
   } else if (segment === "all") {
-    // "All" tab still combines both kinds straight from Kissinger — not in
-    // scope for the Phase 3.3 read migration (GH #44 targets the People /
-    // VC / Prospects / Other Orgs segments specifically; see
-    // src/lib/contacts-read.ts for what moved and why).
-    const funnelData = await fetchKissingerFunnelData();
-    if (!funnelData) {
+    // "All" tab (Postgres cutover, 2026-07-31): combines every non-archived
+    // person (excluding investor contacts — same rule the People tab
+    // applies) with every non-archived organization regardless of
+    // isVcFirm/isProspect classification. This was the last Contacts-page
+    // segment still reading from Kissinger (fetchKissingerFunnelData() +
+    // fetchContactsPage("org"/"person")) — see src/lib/contacts-read.ts's
+    // fetchAllOrgsPageFromPostgres for the Postgres replacement.
+    //
+    // Cursor encoding: people and orgs paginate independently (different
+    // Postgres id spaces), so the opaque `after` cursor for this segment is
+    // "<personCursor>::<orgCursor>" — see encodeAllTabCursor/decodeAllTabCursor
+    // in src/lib/contacts-read.ts.
+    const { personAfter, orgAfter } = decodeAllTabCursor(afterCursor);
+
+    const [personTotal, orgTotal] = await Promise.all([
+      fetchAllPeopleCountFromPostgres(),
+      fetchAllOrgsCountFromPostgres(),
+    ]);
+    if (personTotal === null || orgTotal === null) {
       offline = true;
     } else {
-      const personCount = funnelData.stats.entitiesByKind["person"] ?? 0;
-      const orgCount = funnelData.stats.entitiesByKind["org"] ?? 0;
       tabCounts = {
-        people: personCount,
+        people: personTotal,
         vc: 0,
         prospects: 0,
-        "other-orgs": orgCount,
-        all: personCount + orgCount,
+        "other-orgs": orgTotal,
+        all: personTotal + orgTotal,
       };
     }
 
     if (!offline) {
       const [peoplePage, orgsPage] = await Promise.all([
-        fetchContactsPage("person", Math.ceil(PAGE_SIZE / 2), afterCursor),
-        fetchContactsPage("org", Math.floor(PAGE_SIZE / 2), afterCursor),
+        fetchPeopleContactsFromPostgres(Math.ceil(PAGE_SIZE / 2), personAfter),
+        fetchAllOrgsPageFromPostgres(Math.floor(PAGE_SIZE / 2), orgAfter),
       ]);
       if (!peoplePage && !orgsPage) {
         offline = true;
       } else {
-        // Filter investor people out of contacts page
-        const filteredPeople = (peoplePage?.contacts ?? []).filter(
-          (p) => !p.tags.some((t) => INVESTOR_PERSON_TAGS.has(t))
-        );
-        contacts = [...filteredPeople, ...(orgsPage?.contacts ?? [])];
+        // fetchPeopleContactsFromPostgres already excludes investor contacts
+        // (isInvestorContact: false), matching the Kissinger-era
+        // INVESTOR_PERSON_TAGS filter applied here previously.
+        contacts = [...(peoplePage?.contacts ?? []), ...(orgsPage?.contacts ?? [])];
         // Sort alphabetically
         contacts.sort((a, b) => a.name.localeCompare(b.name));
         hasNextPage = (peoplePage?.hasNextPage ?? false) || (orgsPage?.hasNextPage ?? false);
-        endCursor = peoplePage?.endCursor ?? orgsPage?.endCursor ?? null;
+        endCursor = hasNextPage
+          ? encodeAllTabCursor(peoplePage?.endCursor ?? null, orgsPage?.endCursor ?? null)
+          : null;
         hasPreviousPage = !!afterCursor;
       }
     }

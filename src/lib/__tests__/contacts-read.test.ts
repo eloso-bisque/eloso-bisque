@@ -4,6 +4,8 @@ import {
   whereForOrgSegment,
   orgToEntitySummary,
   contactToEntitySummary,
+  encodeAllTabCursor,
+  decodeAllTabCursor,
 } from "../contacts-read";
 
 describe("classifyOrganization (typed-field segmentation, GH #44)", () => {
@@ -101,5 +103,30 @@ describe("contactToEntitySummary", () => {
 
   it("returns null when kissingerId is missing", () => {
     expect(contactToEntitySummary({ ...baseContact, kissingerId: null })).toBeNull();
+  });
+});
+
+describe("encodeAllTabCursor / decodeAllTabCursor (Contacts 'All' tab Postgres cutover)", () => {
+  it("round-trips two real cursor ids", () => {
+    const encoded = encodeAllTabCursor("cuid-person-1", "cuid-org-1");
+    expect(encoded).toBe("cuid-person-1::cuid-org-1");
+    expect(decodeAllTabCursor(encoded)).toEqual({
+      personAfter: "cuid-person-1",
+      orgAfter: "cuid-org-1",
+    });
+  });
+
+  it("round-trips when only the person side has more pages", () => {
+    const encoded = encodeAllTabCursor("cuid-person-1", null);
+    expect(decodeAllTabCursor(encoded)).toEqual({ personAfter: "cuid-person-1", orgAfter: undefined });
+  });
+
+  it("round-trips when only the org side has more pages", () => {
+    const encoded = encodeAllTabCursor(null, "cuid-org-1");
+    expect(decodeAllTabCursor(encoded)).toEqual({ personAfter: undefined, orgAfter: "cuid-org-1" });
+  });
+
+  it("decodeAllTabCursor returns an empty object for an undefined cursor (first page)", () => {
+    expect(decodeAllTabCursor(undefined)).toEqual({});
   });
 });
