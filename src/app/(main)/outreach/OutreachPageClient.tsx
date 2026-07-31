@@ -109,7 +109,13 @@ export default function OutreachPageClient({
 
   const tabs: { label: ActiveTab; count: number; signal?: boolean }[] = [
     { label: "Active", count: myTasks.length },
-    { label: "Signals", count: signalContacts.length, signal: signalContacts.length > 0 },
+    // Signals tab hidden per Drew's 2026-07-31 instruction: the underlying
+    // Trigify signal data (written by the trigify-daily-sync job) is a
+    // one-time Postgres backfill snapshot, not continuously synced — the
+    // sync job hasn't run since May 9 and has no Postgres dual-write yet.
+    // Commented out (not removed) so this can be flipped back on once the
+    // sync job is fixed. See background in the PR that added this comment.
+    // { label: "Signals", count: signalContacts.length, signal: signalContacts.length > 0 },
     { label: "Sent", count: sentContacts.length },
   ];
 
@@ -219,7 +225,14 @@ export default function OutreachPageClient({
         </div>
       </div>
 
-      {/* Reload result / error banner */}
+      {/*
+        New Batch reload result / error banner — hidden per Drew's 2026-07-31
+        instruction alongside the "New Batch" button below. The candidate
+        pool it draws from relies on Postgres tags (prospect-skipped, etc.)
+        that are a one-time backfill snapshot, not kept in sync, so serving
+        "new" batches risks resurfacing already-skipped/contacted people.
+        Commented out (not removed) so it can be flipped back on later.
+
       {reloadResult && (
         <div className="hidden md:flex items-center gap-2 px-4 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
           <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
@@ -235,6 +248,7 @@ export default function OutreachPageClient({
           {reloadError}
         </div>
       )}
+      */}
 
       {/* Desktop: tab bar + Open Next 8 button (hidden on mobile) */}
       <div className="hidden md:flex items-end justify-between gap-4 border-b border-bisque-200">
@@ -268,7 +282,16 @@ export default function OutreachPageClient({
         </div>
 
         <div className="flex items-center gap-2 mb-1">
-          {/* Reload Outreach Tasks button */}
+          {/*
+            "New Batch" reload button — hidden per Drew's 2026-07-31 instruction.
+            The candidate pool it pulls from is scored against Postgres tags
+            (prospect-skipped, outreach-sent, etc.) that are a one-time backfill
+            snapshot, not continuously synced (trigify-daily-sync has zero
+            Postgres dual-write code and hasn't run since May 9), so pulling a
+            "new" batch right now risks resurfacing already-skipped/contacted
+            people into someone's queue. Commented out (not removed) so this
+            can be flipped back on once the sync job is fixed.
+
           <button
             onClick={handleReloadTasks}
             disabled={reloading}
@@ -295,6 +318,7 @@ export default function OutreachPageClient({
             </svg>
             {reloading ? "Loading…" : "New Batch"}
           </button>
+          */}
 
           {/* Open Next 8 LinkedIn Profiles button */}
           <button
@@ -325,7 +349,12 @@ export default function OutreachPageClient({
         </div>
       </div>
 
-      {/* Mobile: Reload Tasks button */}
+      {/*
+        Mobile: Reload Tasks button — hidden per Drew's 2026-07-31 instruction,
+        same reasoning as the desktop "New Batch" button above (stale/unsynced
+        Postgres backfill tags). Commented out (not removed) so it can be
+        flipped back on later.
+
       <div className="md:hidden">
         <button
           onClick={handleReloadTasks}
@@ -363,6 +392,7 @@ export default function OutreachPageClient({
           <p className="mt-1 text-xs text-red-600 text-center">{reloadError}</p>
         )}
       </div>
+      */}
 
       {/* Mobile: Open Next 8 button (shown below tabs) */}
       {totalWithLinkedin > 0 && (
